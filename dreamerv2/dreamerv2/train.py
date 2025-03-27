@@ -42,6 +42,8 @@ import common
 
 def main():
 
+  print("-"*100,"Version:",3)
+
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
   
@@ -99,6 +101,13 @@ def main():
   #Función que crea el entorno de entrenamiento 
   def make_env(mode):
     suite, task = config.task.split('_', 1)
+    env = common.envs.make(
+        config.task, 
+        render_size=config.render_size,
+        process_size=config.process_size, 
+        use_obj_detection=config.use_obj_detection,
+        obj_detection_threshold=config.get('obj_detection_threshold', 0.7),
+    )
     if suite == 'dmc':
       env = common.DMC(
           task, config.action_repeat, config.render_size, config.dmc_camera)

@@ -8,6 +8,7 @@ import cloudpickle
 import gym
 import numpy as np
 
+from . import obj_detector
 
 class GymWrapper:
 
@@ -622,7 +623,7 @@ class Async:
           continue
         if message == self._CALL:
           name, args, kwargs = payload
-          result = getattr(env, name)(*args, **kwargs)
+          result = getattr(env, name)(*args, kwargs)
           conn.send((self._RESULT, result))
           continue
         if message == self._CLOSE:
@@ -637,3 +638,233 @@ class Async:
         conn.close()
       except IOError:
         pass  # The connection was already closed.
+
+
+class ObjectDetectionWrapper:
+  """Environment wrapper that adds object detection to observations."""
+
+  def __init__(self, env, template_path=None, detection_threshold=0.7):
+    self._env = env
+    self.detection_size = (128, 128)  # Default size for detection
+    self.process_size = (64, 64)      # Size for model processing
+    
+    # Create detector
+    self.detector = obj_detector.create_detector(
+        template_path=template_path,
+        threshold=detection_threshold,
+        detection_size=self.detection_size,
+        process_size=self.process_size
+    )
+    
+    # Handle both gym-style and DreamerV2-style environments
+    if hasattr(self._env, 'act_space'):
+        self._act_space = self._env.act_space
+    
+    if hasattr(self._env, 'obs_space'):
+        self._obs_space = self._update_obs_space()
+    
+    # For gym-style environments
+    if hasattr(self._env, 'action_space'):
+        self.action_space = self._env.action_space
+    
+    if hasattr(self._env, 'observation_space'):
+        self.observation_space = self._update_observation_space()
+    
+    # Keep other attributes
+    if hasattr(self._env, 'reward_range'):
+        self.reward_range = self._env.reward_range
+    if hasattr(self._env, 'metadata'):
+        self.metadata = self._env.metadata
+
+  def __getattr__(self, name):
+    """Forward unknown attributes to the wrapped environment."""
+    if name.startswith('_'):
+      raise AttributeError(f"attempted to get missing private attribute '{name}'")
+    return getattr(self._env, name)
+    
+  @property
+  def act_space(self):
+    """Property to match DreamerV2's environment interface."""
+    return self._act_space
+    
+  @property
+  def obs_space(self):
+    """Property to match DreamerV2's environment interface."""
+    return self._obs_space
+
+  def _update_obs_space(self):
+    """Update DreamerV2-style observation space."""
+    spaces = dict(self._env.obs_space)
+    
+    if 'image' in spaces:
+      if len(spaces['image'].shape) > 1:  # Make sure it's an image
+        # Calculate the output shape based on input shape
+        if len(spaces['image'].shape) == 3:
+            input_channels = spaces['image'].shape[-1]
+            if input_channels == 1:
+                # For grayscale, we'll convert to RGB + mask (6 channels)
+                shape = self.process_size + (6,)  # 3 channels for RGB image + 3 for mask
+            else:
+                # For RGB, we'll have 6 channels (3 for image + 3 for mask)
+                shape = self.process_size + (6,)
+        else:
+            # Fallback for 2D images
+            shape = self.process_size + (2,)  # 2 channels
+            
+        spaces['image'] = gym.spaces.Box(0, 255, shape, dtype=np.uint8)
+        
+    return spaces
+
+  def _update_observation_space(self):
+    """Update gym-style observation space to include the mask channel."""
+    import gym
+    from gym.spaces import Box
+    
+    obs_space = self._env.observation_space
+    
+    # If it's not a Dict space, assume it's a Box space with image observations
+    if isinstance(obs_space, gym.spaces.Dict):
+        updated_spaces = {}
+        for key, space in obs_space.spaces.items():
+            if key == 'image':  # Only update the image part
+                low = np.zeros((*self.process_size, 2), dtype=np.float32)
+                high = np.ones((*self.process_size, 2), dtype=np.float32)
+                updated_spaces[key] = Box(low=low, high=high, dtype=np.float32)
+            else:
+                updated_spaces[key] = space
+        return gym.spaces.Dict(updated_spaces)
+    else:  # Assuming Box space
+        low = np.zeros((*self.process_size, 2), dtype=np.float32)
+        high = np.ones((*self.process_size, 2), dtype=np.float32)
+        return Box(low=low, high=high, dtype=np.float32)
+
+  def _process_obs(self, obs):
+    """Process observation to add object detection mask."""
+    import gym
+    
+    # If observation is a dictionary, only process the image part
+    if isinstance(obs, dict):
+        result = obs.copy()
+        if 'image' in obs:
+            # Get the original image
+            original_image = obs['image']
+            original_shape = original_image.shape
+            
+            # Process the image with object detection
+            _, _, mask, _ = self.detector.process_and_resize(original_image)
+            
+            # We need to handle different channel configurations
+            if len(original_shape) == 3:  # Has channel dimension
+                num_channels = original_shape[-1]
+                
+                # For grayscale images (1 channel)
+                if num_channels == 1:
+                    # Create a 2-channel image with the original grayscale and mask
+                    # We'll duplicate the grayscale for each RGB channel
+                    gray_channel = original_image[..., 0:1]
+                    mask_channel = mask[..., None]  # Add channel dimension if needed
+                    
+                    # Create a multi-channel image that matches model expectations
+                    # Duplicate the grayscale across all RGB channels
+                    combined = np.concatenate([
+                        np.tile(gray_channel, [1, 1, 3]),  # Convert grayscale to RGB
+                        np.tile(mask_channel, [1, 1, 3])   # Duplicate mask across RGB channels
+                    ], axis=-1)  # Creates a 6-channel image (3 for image, 3 for mask)
+                    
+                # For RGB images (3 channels)
+                else:
+                    # Original has 3 channels, create a 6 channel output (RGB + mask in RGB)
+                    mask_channels = np.tile(mask[..., None], [1, 1, 3])  # Duplicate mask to 3 channels
+                    combined = np.concatenate([original_image, mask_channels], axis=-1)
+                
+                result['image'] = combined
+            else:
+                # Fallback for images without channel dimension
+                # Add channels as needed
+                image_with_channel = original_image[..., None]
+                mask_with_channel = mask[..., None]
+                combined = np.concatenate([image_with_channel, mask_with_channel], axis=-1)
+                result['image'] = combined
+                
+        return result
+    else:
+        # Observation is the image directly
+        original_shape = obs.shape
+        
+        # Process and return combined image
+        _, _, mask, _ = self.detector.process_and_resize(obs)
+        
+        if len(original_shape) == 3:  # Has channel dimension
+            num_channels = original_shape[-1]
+            
+            if num_channels == 1:  # Grayscale
+                # Duplicate to match RGB expectations (3 channels)
+                gray_channel = obs[..., 0:1]
+                mask_channel = mask[..., None]
+                
+                combined = np.concatenate([
+                    np.tile(gray_channel, [1, 1, 3]),
+                    np.tile(mask_channel, [1, 1, 3])
+                ], axis=-1)
+            else:  # RGB
+                mask_channels = np.tile(mask[..., None], [1, 1, 3])
+                combined = np.concatenate([obs, mask_channels], axis=-1)
+                
+            return combined
+        else:
+            # Add channel dimension if needed
+            image_with_channel = obs[..., None]
+            mask_with_channel = mask[..., None]
+            return np.concatenate([image_with_channel, mask_with_channel], axis=-1)
+
+  def reset(self):
+    obs = self._env.reset()
+    return self._process_obs(obs)
+
+  def step(self, action):
+    # Handle both dictionary actions and direct actions
+    if isinstance(action, dict) and hasattr(self._env, 'act_space'):
+        obs = self._env.step(action)
+        # DreamerV2-style environments return just the observation dictionary
+        return self._process_obs(obs)
+    else:
+        # Gym-style environments return observation, reward, done, info
+        obs, reward, done, info = self._env.step(action)
+        return self._process_obs(obs), reward, done, info
+
+
+def make(name, **kwargs):
+  # Extract object detection parameters first
+  use_obj_detection = kwargs.pop('use_obj_detection', False)
+  obj_detection_template = kwargs.pop('obj_detection_template', None)
+  obj_detection_threshold = kwargs.pop('obj_detection_threshold', 0.7)
+  
+  # Handle render_size and process_size parameters
+  render_size = kwargs.pop('render_size', (64, 64))
+  process_size = kwargs.pop('process_size', (64, 64))
+  
+  # Create the environment based on the suite
+  suite, task = name.split('_', 1)
+  if suite == 'dmc':
+    env = DMC(task, **kwargs)
+  elif suite == 'atari':
+    env = Atari(task, action_repeat=kwargs.get('action_repeat', 4),
+                size=render_size,
+                grayscale=kwargs.get('atari_grayscale', True))
+  elif suite == 'crafter':
+    outdir = kwargs.get('outdir', None)
+    reward = kwargs.get('reward', True)
+    seed = kwargs.get('seed', None)
+    env = Crafter(outdir, reward, seed)
+  else:
+    raise NotImplementedError(f"Unknown environment suite: {suite}")
+  
+  # Apply object detection wrapper if needed
+  if use_obj_detection or ('pacman' in name.lower()):
+    env = ObjectDetectionWrapper(
+      env, 
+      template_path=obj_detection_template,
+      detection_threshold=obj_detection_threshold
+    )
+  
+  return env
