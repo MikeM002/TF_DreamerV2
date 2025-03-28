@@ -9,7 +9,7 @@ defaults:
   envs_parallel: none
   render_size: [128, 128]
   process_size: [64, 64]  # New parameter for post-detection resize
-  use_obj_detection: False
+  use_obj_detection: True
   obj_detection_threshold: 0.7
   dmc_camera: -1
   atari_grayscale: True
@@ -33,6 +33,7 @@ defaults:
   precision: 16
   jit: True
   debug_prints: True
+  channels_expected: 2  # Default to 6 channels for object detection
 
   # Agent
   clip_rewards: tanh

@@ -78,9 +78,80 @@ import agent
 import common
 
 
+def ensure_channel_consistency(config, train_env, eval_env):
+    """Enhanced version to thoroughly debug channel inconsistency issues."""
+    print_debug("CHANNEL CONSISTENCY INVESTIGATION", separator=True)
+    
+    # 1. Check config settings that affect channels
+    print_debug("Configuration settings that affect channels:")
+    print_debug(f"  use_obj_detection: {config.get('use_obj_detection', False)}")
+    print_debug(f"  atari_grayscale: {config.get('atari_grayscale', False)}")
+    
+    # 2. Look at the environment types and wrappers
+    print_debug("Environment information:")
+    train_env_type = type(train_env).__name__
+    print_debug(f"  Train env type: {train_env_type}")
+    
+    # 3. Get observations from both environments
+    train_obs = train_env.reset()
+    eval_obs = eval_env.reset()
+    
+    # 4. Analyze image characteristics
+    if 'image' in train_obs:
+        image = train_obs['image']
+        print_debug(f"  Train image shape: {image.shape}")
+        print_debug(f"  Train image dtype: {image.dtype}")
+        print_debug(f"  Train image range: {image.min()} to {image.max()}")
+        
+        # 5. If we have multiple channels, inspect them
+        if len(image.shape) == 3 and image.shape[-1] > 1:
+            for i in range(min(image.shape[-1], 6)):  # Show up to 6 channels
+                channel = image[..., i]
+                print_debug(f"  Channel {i} range: {channel.min()} to {channel.max()}")
+                
+                # Check if this looks like a mask (binary or near-binary values)
+                unique_vals = np.unique(channel)
+                if len(unique_vals) <= 2:
+                    print_debug(f"  Channel {i} appears to be binary (mask-like)")
+                    
+    # 6. Check if eval has same structure
+    if 'image' in eval_obs:
+        image = eval_obs['image']
+        print_debug(f"  Eval image shape: {image.shape}")
+    
+    # 7. Look for wrappers that might modify channels
+    if hasattr(train_env, '_env'):
+        wrapper_chain = []
+        current_env = train_env
+        while hasattr(current_env, '_env'):
+            wrapper_chain.append(type(current_env).__name__)
+            current_env = current_env._env
+        print_debug(f"  Environment wrapper chain: {wrapper_chain}")
+    
+    # 8. Identify expected channels based on configuration
+    expected_channels = None
+    if config.get('use_obj_detection', False):
+        if config.get('atari_grayscale', False):
+            expected_channels = 6  # 3 (converted from grayscale) + 3 (mask)
+        else:
+            expected_channels = 6  # 3 (RGB) + 3 (mask)
+    else:
+        if config.get('atari_grayscale', False):
+            expected_channels = 1  # Grayscale
+        else:
+            expected_channels = 3  # RGB
+    
+    print_debug(f"  Expected channels based on config: {expected_channels}")
+    actual_channels = train_obs['image'].shape[-1] if 'image' in train_obs else None
+    print_debug(f"  Actual channels in train env: {actual_channels}")
+    
+    # Return the detected channels for config update
+    return actual_channels
+
+
 def main():
 
-  print("-"*100,"Version:",190)
+  print("-"*100,"Version:",20)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
@@ -140,22 +211,26 @@ def main():
   #Función que crea el entorno de entrenamiento 
   def make_env(mode):
     suite, task = config.task.split('_', 1)
-    env = common.envs.make(
-        config.task, 
-        render_size=config.render_size,
-        process_size=config.process_size, 
-        use_obj_detection=config.use_obj_detection,
-        obj_detection_threshold=config.get('obj_detection_threshold', 0.7),
-    )
     if suite == 'dmc':
       env = common.DMC(
           task, config.action_repeat, config.render_size, config.dmc_camera)
       env = common.NormalizeAction(env)
     elif suite == 'atari':
+      # Create base Atari environment
       env = common.Atari(
           task, config.action_repeat, config.render_size,
           config.atari_grayscale)
-      print(f"Creando entorno de Atari: {task}")  # Añade esta línea para verificar el entorno
+      print(f"Creando entorno de Atari: {task}")
+      
+      # Apply object detection if enabled
+      if config.get('use_obj_detection', False):
+          print(f"Applying object detection wrapper to {task}")
+          env = common.envs.ObjectDetectionWrapper(
+              env, 
+              detection_threshold=config.get('obj_detection_threshold', 0.7),  # Fixed parameter name
+              process_size=config.get('process_size', (64, 64))
+          )
+          
       env = common.OneHotAction(env)
     elif suite == 'crafter':
       assert config.action_repeat == 1
@@ -203,6 +278,12 @@ def main():
         functools.partial(make_env, mode), config.envs_parallel)
     train_envs = [make_async_env('train') for _ in range(config.envs)]
     eval_envs = [make_async_env('eval') for _ in range(eval_envs)]
+
+  # Ensure channel consistency
+  train_channels = ensure_channel_consistency(config, train_envs[0], eval_envs[0])
+  # Force expected channels to 6 regardless of environment
+  config = config.update({'channels_expected': 6})
+  print_debug(f"Forcing config.channels_expected = 6 to match model architecture", separator=True)
   
   #Se configura el driver de entrenamiento y evaluación, define los callbacks para registrar métricas y guardar datos
   act_space = train_envs[0].act_space

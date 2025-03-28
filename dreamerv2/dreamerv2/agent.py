@@ -41,8 +41,58 @@ class Agent(common.Module):
           self.config, self.act_space, self.wm, self.tfstep,
           lambda seq: self.wm.heads['reward'](seq['feat']).mode())
 
+  def debug_tensor_shape(self, tensor, name):
+    """Debug helper to print tensor shape information."""
+    if hasattr(tensor, 'shape'):
+        shape_str = str(tensor.shape)
+        print(f"DEBUG: {name} shape = {shape_str}")
+    else:
+        print(f"DEBUG: {name} has no shape attribute")
+
   @tf.function
   def policy(self, obs, state=None, mode='train'): #Define la política del agente
+    print(f"DEBUG - Agent.policy called in mode: {mode}")
+    if 'image' in obs:
+      print(f"DEBUG - Image shape before preprocess: {obs['image'].shape}")
+
+    if self.config.get('debug_prints', False):
+        print("\n=== POLICY OBSERVATION DEBUG ===")
+        for key, value in obs.items():
+            if hasattr(value, 'shape'):
+                print(f"  Obs key '{key}' shape: {value.shape}")
+                if key == 'image' and len(value.shape) > 2:
+                    # Print unique values in first few channels to help identify mask channels
+                    for i in range(min(value.shape[-1], 6)):
+                        unique_vals = np.unique(value[..., i])
+                        if len(unique_vals) < 10:  # If few unique values, might be a mask
+                            print(f"    Channel {i} unique values: {unique_vals}")
+                        else:
+                            print(f"    Channel {i} value range: {value[..., i].min()} to {value[..., i].max()}")
+
+    # Add channel adaptation
+    if hasattr(self.config, 'channels_expected') and 'image' in obs:
+        image = obs['image']
+        expected_channels = self.config.channels_expected
+        
+        # If channel count doesn't match expected
+        if image.shape[-1] != expected_channels:
+            print(f"Adapting channels: {image.shape[-1]} -> {expected_channels}")
+            
+            # Case 1: Need more channels (e.g., 1->6)
+            if image.shape[-1] < expected_channels:
+                if image.shape[-1] == 1 and expected_channels == 6:
+                    # Convert grayscale to 6 channels (standard pattern for obj detection)
+                    rgb = np.tile(image, [1, 1, 3])  # Convert to RGB
+                    mask = np.zeros_like(rgb)         # Create empty "mask" channels
+                    obs['image'] = np.concatenate([rgb, mask], axis=-1)
+                else:
+                    # General case: repeat channels as needed
+                    obs['image'] = np.tile(image, [1, 1, expected_channels // image.shape[-1]])
+                    
+            # Case 2: Too many channels (e.g., 6->3) - take first N channels
+            elif image.shape[-1] > expected_channels:
+                obs['image'] = image[..., :expected_channels]
+
     obs = tf.nest.map_structure(tf.tensor, obs)
     tf.py_function(lambda: self.tfstep.assign(
         int(self.step), read_value=False), [], [])
@@ -52,6 +102,7 @@ class Agent(common.Module):
       state = latent, action
     latent, action = state
     embed = self.wm.encoder(self.wm.preprocess(obs))
+    print(f"DEBUG - Embedding shape after encoder: {embed.shape}")
     sample = (mode == 'train') or not self.config.eval_state_mean
     latent, _ = self.wm.rssm.obs_step(
         latent, action, embed, obs['is_first'], sample)
@@ -115,6 +166,8 @@ class WorldModel(common.Module):
     for name in config.grad_heads:
       assert name in self.heads, name
     self.model_opt = common.Optimizer('model', **config.model_opt)
+    self._expected_channels = 6 if config.get('use_obj_detection', False) else 1
+    print(f"DEBUG - WorldModel initialized with expected channels: {self._expected_channels}")
 
   def train(self, data, state=None): #Entrena el modelo del mundo, calcula la pérdida del modelo y ¿actualiza las métricas?
     # Debug print
@@ -194,6 +247,11 @@ class WorldModel(common.Module):
 
   @tf.function
   def preprocess(self, obs): #Ajusta la observación para que sea compatible con el modelo del mundo (tipo de datos, normalización, etc.)
+    print("DEBUG - preprocess input shapes:")
+    for key, value in obs.items():
+      if hasattr(value, 'shape'):
+        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+
     dtype = prec.global_policy().compute_dtype
     obs = obs.copy()
     for key, value in obs.items():
@@ -211,6 +269,16 @@ class WorldModel(common.Module):
     }[self.config.clip_rewards](obs['reward'])
     obs['discount'] = 1.0 - obs['is_terminal'].astype(dtype)
     obs['discount'] *= self.config.discount
+
+    if 'image' in obs and obs['image'].shape[-1] == 1 and self._expected_channels == 6:
+      print(f"DEBUG - Adjusting image channels from 1 to {self._expected_channels}")
+      obs['image'] = tf.tile(obs['image'], [1, 1, 1, self._expected_channels])
+
+    print("DEBUG - preprocess output shapes:")
+    for key, value in obs.items():
+      if hasattr(value, 'shape'):
+        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+
     return obs
 
   @tf.function
