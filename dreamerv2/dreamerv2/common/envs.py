@@ -52,12 +52,18 @@ class GymWrapper:
     if not self._act_is_dict:
       action = action[self._act_key]
     obs, reward, done, info = self._env.step(action)
+    # Debug print for observation shape
+    if isinstance(obs, dict) and 'image' in obs:
+      print("DEBUG - Environment - Raw observation image shape:", obs['image'].shape)
     if not self._obs_is_dict:
       obs = {self._obs_key: obs}
     obs['reward'] = float(reward)
     obs['is_first'] = False
     obs['is_last'] = done
     obs['is_terminal'] = info.get('is_terminal', done)
+    # Debug print for processed observation shape
+    if isinstance(obs, dict) and 'image' in obs:
+      print("DEBUG - Environment - Processed observation image shape:", obs['image'].shape)
     return obs
 
   def reset(self):

@@ -27,8 +27,10 @@ class Driver:
     self._state = None
 
   def __call__(self, policy, steps=0, episodes=0):
+    print(f"DEBUG - Driver called - steps: {steps}, episodes: {episodes}")
     step, episode = 0, 0
     while step < steps or episode < episodes:
+      print(f"DEBUG - Driver loop - Current step: {step}, Current episode: {episode}")
       obs = {
           i: self._envs[i].reset()
           for i, ob in enumerate(self._obs) if ob is None or ob['is_last']}
@@ -48,6 +50,7 @@ class Driver:
       obs = [ob() if callable(ob) else ob for ob in obs]
       for i, (act, ob) in enumerate(zip(actions, obs)):
         tran = {k: self._convert(v) for k, v in {**ob, **act}.items()}
+        print(f"DEBUG - Transition for env {i}: {tran.keys()}")
         [fn(tran, worker=i, **self._kwargs) for fn in self._on_steps]
         self._eps[i].append(tran)
         step += 1

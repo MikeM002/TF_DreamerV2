@@ -6,12 +6,50 @@ import pathlib
 import re
 import sys #Variables mantenidas por el interprete
 import warnings
+import time  # Import for timing operations
+
 
 try:
   import rich.traceback #mejora la salida de los errores
   rich.traceback.install()
 except ImportError:
   pass
+
+try:
+    from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn
+    HAS_RICH = True
+    print("Rich library is available","-"*10)
+except ImportError:
+    HAS_RICH = False
+    print("Nooooooooooooooo - Rich library is not available","-"*10)
+
+def print_debug(message, separator=False, metrics=None):
+    """Utility function for consistent debug messages with optional metrics."""
+    if separator:
+        print("=" * 50)
+    timestamp = time.strftime("%H:%M:%S", time.localtime())
+    print(f"[DEBUG {timestamp}] {message}")
+    if metrics and isinstance(metrics, dict):
+        for key, value in metrics.items():
+            try:
+                val = float(value.numpy()) if hasattr(value, 'numpy') else float(value)
+                print(f"  {key}: {val:.6f}")
+            except:
+                print(f"  {key}: {value}")
+    if separator:
+        print("=" * 50)
+
+def track_training_progress(data, step_value, config, is_evaluation=False):
+    """Helper function to log detailed training progress."""
+    mode = "Evaluation" if is_evaluation else "Training"
+    progress = (step_value / config.steps) * 100
+    remaining = config.steps - step_value
+    bar_width = 20
+    filled_width = int(bar_width * step_value / config.steps)
+    bar = '█' * filled_width + '░' * (bar_width - filled_width)
+    print(f"\n{mode} Progress: {step_value}/{config.steps} ({progress:.1f}%)")
+    print(f"[{bar}] {remaining} steps remaining")
+    print(f"Current time: {time.strftime('%H:%M:%S', time.localtime())}")
 
 #os.environ es un diccionario que contiene todas las variables de entorno del sistema
 #TF_CPP_MIN_LOG_LEVEL es una variable de entorno que establece el nivel de registro de TensorFlow (3: solo errores críticos)
@@ -42,14 +80,15 @@ import common
 
 def main():
 
-  print("-"*100,"Version:",3)
+  print("-"*100,"Version:",190)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
   
   #Se carga la configuración por defecto
   yaml = YAML()
-  configs = yaml.load((pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
+  #configs = yaml.load((pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
+  configs = yaml.load((pathlib.Path(__file__).parent / 'lite_configs.yaml').read_text())
   parsed, remaining = common.Flags(configs=['defaults']).parse(known_only=True)
   config = common.Config(configs['defaults'])
   for name in parsed.configs:
@@ -151,7 +190,7 @@ def main():
     logger.add(replay.stats, prefix=mode)
     logger.write()
 
-  print('Create envs.')
+  print_debug("Creating environments...", separator=True)
   #Se crean los entornos de entrenamiento y evaluación
   num_eval_envs = min(config.envs, config.eval_eps)
   if config.envs_parallel == 'none':
@@ -180,12 +219,26 @@ def main():
   #Se pre-entrena el agente con un agente aleatorio para llenar el buffer de replay
   prefill = max(0, config.prefill - train_replay.stats['total_steps'])
   if prefill:
-    print(f'Prefill dataset ({prefill} steps).')
+    print_debug(f"Pre-filling replay buffer with {prefill} random steps...", separator=True)
     random_agent = common.RandomAgent(act_space)
-    train_driver(random_agent, steps=prefill, episodes=1)
+    if HAS_RICH:
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+        ) as progress:
+            prefill_task = progress.add_task("Prefilling replay buffer", total=prefill)
+            def update_progress(tran, worker):
+                progress.update(prefill_task, completed=step.value)
+            train_driver.on_step(update_progress)
+            train_driver(random_agent, steps=prefill, episodes=1)
+    else:
+        train_driver(random_agent, steps=prefill, episodes=1)
     eval_driver(random_agent, episodes=1)
     train_driver.reset()
     eval_driver.reset()
+    print_debug("Pre-filling complete")
 
   #Se crea el agente y se entrena, si se ha guardado un checkpoint previo, se carga
   print('Create agent.')
@@ -194,41 +247,140 @@ def main():
   eval_dataset = iter(eval_replay.dataset(**config.dataset))
   agnt = agent.Agent(config, obs_space, act_space, step)
   train_agent = common.CarryOverState(agnt.train)
+
+  # Add debug logs for environment and model settings
+  if config.get('debug_prints', False):
+    print("=" * 50)
+    print("DEBUG - Environment and Model Settings:")
+    print(f"Process size: {config.get('process_size', 'Not specified')}")
+    print(f"Render size: {config.render_size}")
+    print(f"Encoder CNN depth: {config.encoder.get('cnn_depth')}")
+    print(f"Encoder CNN kernels: {config.encoder.get('cnn_kernels')}")
+    print(f"Decoder CNN depth: {config.decoder.get('cnn_depth')}")
+    print(f"Decoder CNN kernels: {config.decoder.get('cnn_kernels')}")
+    try:
+      for i, layer in enumerate(agnt.wm.encoder._layers):
+        if hasattr(layer, 'filters'):
+          print(f"Encoder Layer {i}: Type={layer.__class__.__name__}, Filters={layer.filters}, Kernel={layer.kernel_size}")
+      for i, layer in enumerate(agnt.wm.heads['decoder']._layers):
+        if hasattr(layer, 'filters'):
+          print(f"Decoder Layer {i}: Type={layer.__class__.__name__}, Filters={layer.filters}, Kernel={layer.kernel_size}")
+    except:
+      print("Could not access model layer details")
+    print("=" * 50)
+
   train_agent(next(train_dataset))
+
+  # After pretrain
   if (logdir / 'variables.pkl').exists():
+    print('='*50)
+    print('Loading variables from checkpoint')
     agnt.load(logdir / 'variables.pkl')
   else:
+    print('='*50)
     print('Pretrain agent.')
-    for _ in range(config.pretrain):
+    for i in range(config.pretrain):
+      if i % max(1, config.pretrain // 5) == 0:
+        print(f'Pretrain step {i}/{config.pretrain}')
       train_agent(next(train_dataset))
-  train_policy = lambda *args: agnt.policy(
-      *args, mode='explore' if should_expl(step) else 'train')
-  eval_policy = lambda *args: agnt.policy(*args, mode='eval')
+    print('Pretrain complete!')
 
-  #Función que define el paso de entrenamiento
-  def train_step(tran, worker):
-    if should_train(step):
-      for _ in range(config.train_steps):
-        mets = train_agent(next(train_dataset))
-        [metrics[key].append(value) for key, value in mets.items()]
-    if should_log(step):
-      for name, values in metrics.items():
-        logger.scalar(name, np.array(values, np.float64).mean())
-        metrics[name].clear()
-      logger.add(agnt.report(next(report_dataset)), prefix='train')
-      logger.write(fps=True)
-  train_driver.on_step(train_step)
+  # Add marker for main training start
+  print_debug("Starting main training loop...", separator=True)
 
-  #Función que define el paso de evaluación, se evalúa el agente y se guarda el checkpoint
-  #Esto se realiza hasta cumplir con el número de pasos especificado en la configuración
+  train_policy = common.CarryOverState(agnt.policy)
+  eval_policy = common.CarryOverState(agnt.policy)
+
+  loop_start_time = time.time()
+  last_checkpoint_time = loop_start_time
+  step_times = []
+
   while step < config.steps:
-    logger.write()
-    print('Start evaluation.')
-    logger.add(agnt.report(next(eval_dataset)), prefix='eval')
-    eval_driver(eval_policy, episodes=config.eval_eps)
-    print('Start training.')
-    train_driver(train_policy, steps=config.eval_every)
-    agnt.save(logdir / 'variables.pkl')
+      block_start_time = time.time()
+
+      # Evaluation phase
+      print_debug(f"Starting evaluation at step {step.value}/{config.steps}", separator=True)
+      try:
+          eval_start = time.time()
+          eval_driver(eval_policy, episodes=config.eval_eps)
+          eval_duration = time.time() - eval_start
+          print_debug(f"Evaluation completed in {eval_duration:.2f}s")
+      except Exception as e:
+          print_debug(f"Error during evaluation: {str(e)}")
+
+      # Training phase
+      print_debug(f"Starting training block at step {step.value}/{config.steps}", separator=True)
+      block_target = min(step.value + config.eval_every, config.steps)
+
+      try:
+          train_start = time.time()
+
+          def train_step_with_tracking(tran, worker):
+              if should_train(step):
+                  if step.value % max(1, config.log_every // 10) == 0:
+                      track_training_progress(tran, step.value, config)
+                      if step_times:
+                          avg_step_time = sum(step_times[-10:]) / min(10, len(step_times))
+                          steps_remaining = config.steps - step.value
+                          est_time_remaining = avg_step_time * steps_remaining
+                          print(f"  Est. remaining time: {est_time_remaining/60:.1f} minutes")
+                  step_start = time.time()
+                  for _ in range(config.train_steps):
+                      data_batch = next(train_dataset)
+                      mets = train_agent(data_batch)
+                      [metrics[key].append(value) for key, value in mets.items()]
+                  step_times.append(time.time() - step_start)
+              if should_log(step):
+                  metric_values = {name: np.array(values, np.float64).mean() for name, values in metrics.items() if values}
+                  metrics.clear()
+                  print_debug(f"Logging metrics at step {step.value}", metrics=metric_values)
+                  logger.add(agnt.report(next(report_dataset)), prefix='train')
+                  logger.write(fps=True)
+
+          original_train_step = train_driver._on_step
+          train_driver.on_step(train_step_with_tracking)
+          train_driver(train_policy, steps=config.eval_every)
+          train_driver._on_step = original_train_step
+
+          train_duration = time.time() - train_start
+          print_debug(f"Training block completed in {train_duration:.2f}s")
+      except Exception as e:
+          print_debug(f"Error during training: {str(e)}")
+
+      # Save checkpoint every 15 minutes or at the specified interval
+      current_time = time.time()
+      checkpoint_interval = config.get('checkpoint_interval_minutes', 15) * 60
+      if current_time - last_checkpoint_time > checkpoint_interval:
+          print_debug(f"Saving checkpoint at step {step.value}")
+          try:
+              agnt.save(logdir / 'variables.pkl')
+              last_checkpoint_time = current_time
+              print_debug("Checkpoint saved successfully")
+          except Exception as e:
+              print_debug(f"Error saving checkpoint: {str(e)}")
+
+      block_duration = time.time() - block_start_time
+      total_duration = time.time() - loop_start_time
+      print_debug(
+          f"Completed block: {step.value}/{config.steps} steps",
+          separator=True,
+          metrics={
+              "block_duration_minutes": block_duration / 60,
+              "total_duration_minutes": total_duration / 60,
+              "steps_per_second": config.eval_every / block_duration if block_duration > 0 else 0
+          }
+      )
+
+  # Final checkpoint
+  try:
+      print_debug("Saving final checkpoint")
+      agnt.save(logdir / 'variables.pkl')
+      print_debug("Final checkpoint saved")
+  except Exception as e:
+      print_debug(f"Error saving final checkpoint: {str(e)}")
+
+  print_debug(f"Training complete. Total time: {(time.time() - loop_start_time) / 60:.2f} minutes", separator=True)
+
   for env in train_envs + eval_envs:
     try:
       env.close()

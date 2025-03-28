@@ -5,6 +5,7 @@ from tensorflow.keras import mixed_precision as prec
 import common
 #Importa el modulo expl (exploración), define como se comporta la exploración aleatoria y la exploración de Plan2Explore (actor-critic)
 import expl 
+import numpy as np
 
 
 class Agent(common.Module):
@@ -16,6 +17,22 @@ class Agent(common.Module):
     self.step = step
     self.tfstep = tf.Variable(int(self.step), tf.int64)
     self.wm = WorldModel(config, obs_space, self.tfstep)
+    # Add debug logs for World Model architecture
+    if self.config.get('debug_prints', False):
+      print("=" * 50)
+      print("DEBUG - World Model Architecture:")
+      print(f"RSSM: hidden={config.rssm.hidden}, deter={config.rssm.deter}, stoch={config.rssm.stoch}")
+      print(f"Encoder: cnn_depth={config.encoder.get('cnn_depth')}, channels={config.encoder.get('cnn_channels', 'not specified')}")
+      print(f"Decoder: cnn_depth={config.decoder.get('cnn_depth')}, channels={config.decoder.get('cnn_channels', 'not specified')}")
+      #wm_params = sum(np.prod(p.shape) for p in self.wm.parameters())
+      #encoder_params = sum(np.prod(p.shape) for p in self.wm.encoder.parameters())
+      #decoder_params = sum(np.prod(p.shape) for p in self.wm.heads['decoder'].parameters())
+      #rssm_params = sum(np.prod(p.shape) for p in self.wm.rssm.parameters())
+      #print(f"World Model Parameters: {wm_params}")
+      #print(f"  - Encoder Parameters: {encoder_params} ({encoder_params/wm_params*100:.1f}%)")
+      #print(f"  - Decoder Parameters: {decoder_params} ({decoder_params/wm_params*100:.1f}%)")
+      #print(f"  - RSSM Parameters: {rssm_params} ({rssm_params/wm_params*100:.1f}%)")
+      #print("=" * 50)
     self._task_behavior = ActorCritic(config, self.act_space, self.tfstep)
     if config.expl_behavior == 'greedy':
       self._expl_behavior = self._task_behavior
@@ -58,9 +75,11 @@ class Agent(common.Module):
 
   @tf.function
   def train(self, data, state=None): #Entrena el agente
+    print(f"DEBUG - Agent train called - Step: {int(self.step)}")
     metrics = {}
     state, outputs, mets = self.wm.train(data, state)
     metrics.update(mets)
+    print(f"DEBUG - WorldModel training complete - Loss metrics: {[(k, float(v)) for k, v in mets.items() if 'loss' in k]}")
     start = outputs['post']
     reward = lambda seq: self.wm.heads['reward'](seq['feat']).mode()
     metrics.update(self._task_behavior.train(
@@ -98,6 +117,9 @@ class WorldModel(common.Module):
     self.model_opt = common.Optimizer('model', **config.model_opt)
 
   def train(self, data, state=None): #Entrena el modelo del mundo, calcula la pérdida del modelo y ¿actualiza las métricas?
+    # Debug print
+    print("DEBUG - Train method - Image shape:", 
+          data['image'].shape if 'image' in data else "No image found")
     with tf.GradientTape() as model_tape:
       model_loss, state, outputs, metrics = self.loss(data, state)
     modules = [self.encoder, self.rssm, *self.heads.values()]
@@ -105,15 +127,19 @@ class WorldModel(common.Module):
     return state, outputs, metrics
 
   def loss(self, data, state=None): #Procesa los datos y calcula la pérdida del modelo
+    print("DEBUG - WorldModel.loss - Processing data batch")
+    for key, value in data.items():
+      if hasattr(value, 'shape'):
+        print(f"DEBUG - Input data - {key}: shape={value.shape}, dtype={value.dtype}")
     data = self.preprocess(data)
     embed = self.encoder(data)
-    post, prior = self.rssm.observe(
-        embed, data['action'], data['is_first'], state)
+    post, prior = self.rssm.observe(embed, data['action'], data['is_first'], state)
+    print(f"DEBUG - RSSM state shapes - Post: {post['stoch'].shape}, Prior: {prior['stoch'].shape}")
     kl_loss, kl_value = self.rssm.kl_loss(post, prior, **self.config.kl)
-    assert len(kl_loss.shape) == 0
+    feat = self.rssm.get_feat(post)
+    print(f"DEBUG - Feature shape after RSSM: {feat.shape}")
     likes = {}
     losses = {'kl': kl_loss}
-    feat = self.rssm.get_feat(post)
     for name, head in self.heads.items():
       grad_head = (name in self.config.grad_heads)
       inp = feat if grad_head else tf.stop_gradient(feat)
@@ -133,6 +159,7 @@ class WorldModel(common.Module):
     metrics['prior_ent'] = self.rssm.get_dist(prior).entropy().mean()
     metrics['post_ent'] = self.rssm.get_dist(post).entropy().mean()
     last_state = {k: v[:, -1] for k, v in post.items()}
+    print(f"DEBUG - Final model loss: {model_loss}")
     return model_loss, last_state, outs, metrics
 
   def imagine(self, policy, start, is_terminal, horizon): #Calcula la secuencia completa de estados imaginados

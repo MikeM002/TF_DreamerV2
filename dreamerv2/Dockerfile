@@ -55,8 +55,9 @@ RUN pip3 install tqdm==4.64.1 \
   pyopengl==3.1.7 \
   importlib-resources==5.4.0 \
   ruamel.yaml==0.18.3 \
-  opencv-python
-
+  opencv-python \
+  rich
+  
 # Atari ROMS.
 RUN wget -L -nv http://www.atarimania.com/roms/Roms.rar && \
   unrar x Roms.rar && \

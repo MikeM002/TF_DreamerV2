@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow.keras import layers
 
 class ConvEncoder(tf.keras.Model):
-  def __init__(self, depth=32, kernels=(4, 4, 4, 4), keys=['image'], **kw):
+  def __init__(self, depth, kernels, keys=['image'], **kw):
     super().__init__()
     self._depth = depth
     self._kernels = kernels

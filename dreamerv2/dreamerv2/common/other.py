@@ -200,3 +200,8 @@ class CarryOverState:
   def __call__(self, *args):
     self._state, out = self._fn(*args, self._state)
     return out
+
+
+def debug_print(config, *args, **kwargs):
+  if getattr(config, 'debug_prints', False):
+    print(*args, **kwargs)
