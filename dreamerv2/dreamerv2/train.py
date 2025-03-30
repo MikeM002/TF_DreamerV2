@@ -131,27 +131,31 @@ def ensure_channel_consistency(config, train_env, eval_env):
     # 8. Identify expected channels based on configuration
     expected_channels = None
     if config.get('use_obj_detection', False):
-        if config.get('atari_grayscale', False):
-            expected_channels = 6  # 3 (converted from grayscale) + 3 (mask)
-        else:
-            expected_channels = 6  # 3 (RGB) + 3 (mask)
+        # Con detección de objetos, usamos el valor configurado (2 canales: grayscale + mask)
+        expected_channels = config.channels_expected  # Usar valor de config (2 para grayscale + mask)
     else:
         if config.get('atari_grayscale', False):
-            expected_channels = 1  # Grayscale
+            expected_channels = 1  # Grayscale sin detección de objetos
         else:
-            expected_channels = 3  # RGB
+            expected_channels = 3  # RGB sin detección de objetos
     
     print_debug(f"  Expected channels based on config: {expected_channels}")
     actual_channels = train_obs['image'].shape[-1] if 'image' in train_obs else None
     print_debug(f"  Actual channels in train env: {actual_channels}")
     
-    # Return the detected channels for config update
-    return actual_channels
+    # Detect channels in train environment
+    if 'image' in train_obs:
+        detected_channels = train_obs['image'].shape[-1]
+        print_debug(f"[DEBUG] Detected {detected_channels} channels in environment observations")
+        return detected_channels
+    else:
+        print_debug("[WARNING] No image key found in observations")
+        return config.channels_expected  # Default to existing config if no image key
 
 
 def main():
 
-  print("-"*100,"Version:",20)
+  print("-"*100,"Version:",24)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
@@ -225,10 +229,69 @@ def main():
       # Apply object detection if enabled
       if config.get('use_obj_detection', False):
           print(f"Applying object detection wrapper to {task}")
+          template_path = os.path.join(os.path.dirname(__file__), 'templates', 'pacman.png')
+          
+          print("=" * 50)
+          print("DEBUG: TEMPLATE LOADING DETAILS")
+          print(f"Absolute template path: {os.path.abspath(template_path)}")
+          print(f"Current working directory: {os.getcwd()}")
+          print(f"Current file location: {__file__}")
+          print(f"Path exists: {os.path.exists(template_path)}")
+          
+          template_dir = os.path.dirname(template_path)
+          print(f"Template directory exists: {os.path.exists(template_dir)}")
+          
+          if os.path.exists(os.path.dirname(__file__)):
+              print(f"Files in {os.path.dirname(__file__)}:")
+              for f in os.listdir(os.path.dirname(__file__)):
+                  print(f"  {f}")
+                  
+              templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
+              if os.path.exists(templates_dir):
+                  print(f"Files in templates directory:")
+                  for f in os.listdir(templates_dir):
+                      print(f"  {f}")
+              else:
+                  print("Templates directory doesn't exist. Creating it...")
+                  os.makedirs(templates_dir, exist_ok=True)
+                  print(f"Templates directory created: {os.path.exists(templates_dir)}")
+                  
+                  try:
+                      import cv2
+                      import numpy as np
+                      template = np.zeros((32, 32, 3), dtype=np.uint8)
+                      cv2.circle(template, (16, 16), 14, (0, 255, 255), -1)
+                      cv2.imwrite(template_path, template)
+                      print(f"Created template at {template_path}")
+                      print(f"Template now exists: {os.path.exists(template_path)}")
+                      print(f"Template size: {os.path.getsize(template_path)} bytes")
+                  except Exception as e:
+                      print(f"Error creating template: {str(e)}")
+          
+          print("=" * 50)
+          
+          try:
+              import cv2
+              template = cv2.imread(template_path, 0)
+              if template is None:
+                  print(f"ERROR: OpenCV couldn't load the template at {template_path}")
+                  template = cv2.imread(template_path, 1)
+                  if template is None:
+                      print("ERROR: OpenCV couldn't load template in color mode either")
+                      print(f"File readable: {os.access(template_path, os.R_OK)}")
+                      print(f"File writable: {os.access(template_path, os.W_OK)}")
+                  else:
+                      print(f"Successfully loaded template in color mode: {template.shape}")
+              else:
+                  print(f"Successfully loaded template in grayscale: {template.shape}")
+          except Exception as e:
+              print(f"Exception when loading template with OpenCV: {str(e)}")
+          
           env = common.envs.ObjectDetectionWrapper(
               env, 
-              detection_threshold=config.get('obj_detection_threshold', 0.7),  # Fixed parameter name
-              process_size=config.get('process_size', (64, 64))
+              detection_threshold=config.get('obj_detection_threshold', 0.7),
+              process_size=config.get('process_size', (64, 64)),
+              template_path=template_path
           )
           
       env = common.OneHotAction(env)
@@ -281,10 +344,16 @@ def main():
 
   # Ensure channel consistency
   train_channels = ensure_channel_consistency(config, train_envs[0], eval_envs[0])
-  # Force expected channels to 6 regardless of environment
-  config = config.update({'channels_expected': 6})
-  print_debug(f"Forcing config.channels_expected = 6 to match model architecture", separator=True)
-  
+  if train_channels != config.channels_expected:
+      print_debug(f"[DEBUG] Updating channels_expected from {config.channels_expected} to {train_channels}")
+      # Update both the general channels_expected and specific encoder/decoder channels
+      config = config.update({
+          'channels_expected': train_channels,
+          'encoder.cnn_channels': train_channels,
+          'decoder.cnn_channels': train_channels
+      })
+      print_debug(f"[DEBUG] Updated config now has channels_expected = {config.channels_expected}")
+
   #Se configura el driver de entrenamiento y evaluación, define los callbacks para registrar métricas y guardar datos
   act_space = train_envs[0].act_space
   obs_space = train_envs[0].obs_space
@@ -321,13 +390,52 @@ def main():
     eval_driver.reset()
     print_debug("Pre-filling complete")
 
+  # Modify obs_space to ensure the correct number of channels
+  modified_obs_space = dict(obs_space)
+
+  # If 'image' exists in the observation space and object detection is enabled
+  if 'image' in modified_obs_space and config.use_obj_detection:
+      current_shape = modified_obs_space['image'].shape
+      current_channels = current_shape[-1]
+
+      print_debug(f"Current obs_space image shape: {current_shape} with {current_channels} channels")
+      print_debug(f"Expected channels from config: {config.channels_expected}")
+
+      # Adjust the observation space to match the expected number of channels
+      if current_channels != config.channels_expected:
+          if hasattr(modified_obs_space['image'], 'low') and hasattr(modified_obs_space['image'], 'high'):
+              import gym
+              new_shape = current_shape[:-1] + (config.channels_expected,)
+              print_debug(f"Creating new observation space with shape: {new_shape}")
+              modified_obs_space['image'] = gym.spaces.Box(
+                  low=0, high=255, shape=new_shape, dtype=modified_obs_space['image'].dtype)
+          else:
+              from common import Space
+              new_shape = current_shape[:-1] + (config.channels_expected,)
+              print_debug(f"Creating new observation space with shape: {new_shape}")
+              modified_obs_space['image'] = Space(np.zeros(new_shape, dtype=np.uint8))
+
+  # Create the agent with the modified observation space
+  print('Creating agent with corrected observation space.')
+  agnt = agent.Agent(config, modified_obs_space, act_space, step)
+
   #Se crea el agente y se entrena, si se ha guardado un checkpoint previo, se carga
   print('Create agent.')
   train_dataset = iter(train_replay.dataset(**config.dataset))
   report_dataset = iter(train_replay.dataset(**config.dataset))
   eval_dataset = iter(eval_replay.dataset(**config.dataset))
-  agnt = agent.Agent(config, obs_space, act_space, step)
   train_agent = common.CarryOverState(agnt.train)
+
+  # Add debug logs before training
+  sample_batch = next(train_dataset)
+  print("DEBUG - Preparing to train agent with data batch:")
+  for key, value in sample_batch.items():
+      if hasattr(value, 'shape'):
+          print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+          if key == 'image':
+              print(f"  image min/max values: {value.numpy().min()}/{value.numpy().max()}")
+
+  train_agent(sample_batch)
 
   # Add debug logs for environment and model settings
   if config.get('debug_prints', False):
@@ -381,53 +489,50 @@ def main():
 
       # Evaluation phase
       print_debug(f"Starting evaluation at step {step.value}/{config.steps}", separator=True)
-      try:
-          eval_start = time.time()
-          eval_driver(eval_policy, episodes=config.eval_eps)
-          eval_duration = time.time() - eval_start
-          print_debug(f"Evaluation completed in {eval_duration:.2f}s")
-      except Exception as e:
-          print_debug(f"Error during evaluation: {str(e)}")
+      eval_start = time.time()
+      eval_driver(eval_policy, episodes=config.eval_eps)
+      eval_duration = time.time() - eval_start
+      print_debug(f"Evaluation completed in {eval_duration:.2f}s")
+
 
       # Training phase
       print_debug(f"Starting training block at step {step.value}/{config.steps}", separator=True)
       block_target = min(step.value + config.eval_every, config.steps)
 
-      try:
-          train_start = time.time()
+      
+      train_start = time.time()
 
-          def train_step_with_tracking(tran, worker):
-              if should_train(step):
-                  if step.value % max(1, config.log_every // 10) == 0:
-                      track_training_progress(tran, step.value, config)
-                      if step_times:
-                          avg_step_time = sum(step_times[-10:]) / min(10, len(step_times))
-                          steps_remaining = config.steps - step.value
-                          est_time_remaining = avg_step_time * steps_remaining
-                          print(f"  Est. remaining time: {est_time_remaining/60:.1f} minutes")
-                  step_start = time.time()
-                  for _ in range(config.train_steps):
-                      data_batch = next(train_dataset)
-                      mets = train_agent(data_batch)
-                      [metrics[key].append(value) for key, value in mets.items()]
-                  step_times.append(time.time() - step_start)
-              if should_log(step):
-                  metric_values = {name: np.array(values, np.float64).mean() for name, values in metrics.items() if values}
-                  metrics.clear()
-                  print_debug(f"Logging metrics at step {step.value}", metrics=metric_values)
-                  logger.add(agnt.report(next(report_dataset)), prefix='train')
-                  logger.write(fps=True)
+      def train_step_with_tracking(tran, worker):
+          if should_train(step):
+              if step.value % max(1, config.log_every // 10) == 0:
+                  track_training_progress(tran, step.value, config)
+                  if step_times:
+                      avg_step_time = sum(step_times[-10:]) / min(10, len(step_times))
+                      steps_remaining = config.steps - step.value
+                      est_time_remaining = avg_step_time * steps_remaining
+                      print(f"  Est. remaining time: {est_time_remaining/60:.1f} minutes")
+              step_start = time.time()
+              for _ in range(config.train_steps):
+                  data_batch = next(train_dataset)
+                  mets = train_agent(data_batch)
+                  [metrics[key].append(value) for key, value in mets.items()]
+              step_times.append(time.time() - step_start)
+          if should_log(step):
+              metric_values = {name: np.array(values, np.float64).mean() for name, values in metrics.items() if values}
+              metrics.clear()
+              print_debug(f"Logging metrics at step {step.value}", metrics=metric_values)
+              logger.add(agnt.report(next(report_dataset)), prefix='train')
+              logger.write(fps=True)
 
-          original_train_step = train_driver._on_step
-          train_driver.on_step(train_step_with_tracking)
-          train_driver(train_policy, steps=config.eval_every)
-          train_driver._on_step = original_train_step
+      original_on_steps = train_driver._on_steps.copy()
+      train_driver._on_steps = []  # Clear existing on_step callbacks
+      train_driver.on_step(train_step_with_tracking)  # Add our tracking callback
+      train_driver(train_policy, steps=config.eval_every)
+      train_driver._on_steps = original_on_steps  # Restore original callbacks
 
-          train_duration = time.time() - train_start
-          print_debug(f"Training block completed in {train_duration:.2f}s")
-      except Exception as e:
-          print_debug(f"Error during training: {str(e)}")
-
+      train_duration = time.time() - train_start
+      print_debug(f"Training block completed in {train_duration:.2f}s")
+      
       # Save checkpoint every 15 minutes or at the specified interval
       current_time = time.time()
       checkpoint_interval = config.get('checkpoint_interval_minutes', 15) * 60

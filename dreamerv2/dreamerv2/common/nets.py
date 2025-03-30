@@ -44,14 +44,27 @@ class EnsembleRSSM(common.Module):
 
   @tf.function
   def observe(self, embed, action, is_first, state=None):
+    print(f"DEBUG - RSSM.observe called with state type: {type(state)}")
+    if state is not None:
+        if isinstance(state, dict):
+            print(f"DEBUG - RSSM state keys: {list(state.keys())}")
+            for k, v in state.items():
+                print(f"DEBUG - RSSM state[{k}] shape: {v.shape if hasattr(v, 'shape') else 'No shape'}")
+        else:
+            print(f"DEBUG - RSSM state is not a dict but: {type(state)}")
     swap = lambda x: tf.transpose(x, [1, 0] + list(range(2, len(x.shape))))
     if state is None:
       state = self.initial(tf.shape(action)[0])
+
     post, prior = common.static_scan(
         lambda prev, inputs: self.obs_step(prev[0], *inputs),
         (swap(action), swap(embed), swap(is_first)), (state, state))
     post = {k: swap(v) for k, v in post.items()}
     prior = {k: swap(v) for k, v in prior.items()}
+    print(f"DEBUG - RSSM.observe")
+    print(f"DEBUG - Action shape: {action.shape}")
+    print(f"DEBUG - Embed shape: {embed.shape}")
+    print(f"DEBUG - is_first shape: {is_first.shape}")
     return post, prior
 
   @tf.function
@@ -88,11 +101,26 @@ class EnsembleRSSM(common.Module):
 
   @tf.function
   def obs_step(self, prev_state, prev_action, embed, is_first, sample=True):
-    # if is_first.any():
+    print(f"DEBUG - RSSM.obs_step called with prev_state type: {type(prev_state)}")
+    if prev_state is not None:
+        if isinstance(prev_state, dict):
+            print(f"DEBUG - prev_state keys: {list(prev_state.keys())}")
+            for k, v in prev_state.items():
+                print(f"DEBUG - prev_state[{k}] shape: {v.shape if hasattr(v, 'shape') else 'No shape'}")
+        else:
+            print(f"DEBUG - prev_state is not a dict but: {type(prev_state)}")
+    print(f"DEBUG - prev_action shape: {prev_action.shape if hasattr(prev_action, 'shape') else 'No shape'}")
+
     prev_state, prev_action = tf.nest.map_structure(
         lambda x: tf.einsum(
             'b,b...->b...', 1.0 - is_first.astype(x.dtype), x),
         (prev_state, prev_action))
+    
+    print(f"DEBUG - RSSM.obs_step")
+    print(f"DEBUG - is_first: {is_first}")
+    print(f"DEBUG - prev_state detailed: {prev_state}")
+    print(f"DEBUG - prev_action detailed: {prev_action}")
+        
     prior = self.img_step(prev_state, prev_action, sample)
     x = tf.concat([prior['deter'], embed], -1)
     x = self.get('obs_out', tfkl.Dense, self._hidden)(x)

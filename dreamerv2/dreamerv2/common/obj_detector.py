@@ -38,17 +38,49 @@ class PacmanDetector:
     
     def load_template(self, template_path):
         """Load PacMan template from the given path."""
-        if not template_path or not os.path.exists(template_path):
-            self.logger.warning(f"Template not found: {template_path}")
+        print(f"PacmanDetector: Attempting to load template from {template_path}")
+        
+        if not template_path:
+            print(f"PacmanDetector: Template path is empty")
             return False
+            
+        if not os.path.exists(template_path):
+            print(f"PacmanDetector: Template file doesn't exist at {template_path}")
+            print(f"PacmanDetector: Current working directory: {os.getcwd()}")
+            print(f"PacmanDetector: Absolute template path: {os.path.abspath(template_path)}")
+            return False
+        
+        print(f"PacmanDetector: Template file exists with size: {os.path.getsize(template_path)} bytes")
+        print(f"PacmanDetector: File readable: {os.access(template_path, os.R_OK)}")
             
         self.template = cv2.imread(template_path, 0)
         if self.template is None:
-            self.logger.warning(f"Failed to load template from {template_path}")
-            return False
+            print(f"PacmanDetector: Failed to load template with cv2.imread")
+            color_template = cv2.imread(template_path, 1)
+            if color_template is None:
+                print(f"PacmanDetector: Failed to load in color mode too")
+                try:
+                    with open(template_path, 'rb') as f:
+                        content = f.read(20)
+                    print(f"PacmanDetector: File header bytes: {content}")
+                except Exception as e:
+                    print(f"PacmanDetector: Error reading file: {str(e)}")
+            else:
+                print(f"PacmanDetector: Loaded in color mode: {color_template.shape}")
+                self.template = cv2.cvtColor(color_template, cv2.COLOR_BGR2GRAY)
+                print(f"PacmanDetector: Converted to grayscale: {self.template.shape}")
+        else:
+            print(f"PacmanDetector: Template loaded successfully: shape={self.template.shape}, dtype={self.template.dtype}")
             
         self.logger.info(f"Loaded PacMan template from {template_path}")
-        return True
+        return self.template is not None
+    
+    @property
+    def templates(self):
+        """Return a list of templates for compatibility with the wrapper."""
+        if self.template is not None:
+            return [self.template]
+        return []
     
     def process_frame(self, frame):
         """

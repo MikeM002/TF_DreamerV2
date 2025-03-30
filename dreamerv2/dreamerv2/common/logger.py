@@ -146,17 +146,23 @@ class TensorBoardOutput:
 def encode_gif(frames, fps):
   from subprocess import Popen, PIPE
   h, w, c = frames[0].shape
+  
+  # Use only the first channel for GIF encoding if there are 2 channels
+  if c == 2:
+    print("[DEBUG] Using only the first channel (grayscale) for GIF encoding")
+    frames = frames[..., 0][..., None]  # Keep channel dimension
+    c = 1  # Update to 1 channel
+  
   pxfmt = {1: 'gray', 3: 'rgb24'}[c]
   cmd = ' '.join([
-      'ffmpeg -y -f rawvideo -vcodec rawvideo',
-      f'-r {fps:.02f} -s {w}x{h} -pix_fmt {pxfmt} -i - -filter_complex',
-      '[0:v]split[x][z];[z]palettegen[y];[x]fifo[x];[x][y]paletteuse',
-      f'-r {fps:.02f} -f gif -'])
+    'ffmpeg -y -f rawvideo -vcodec rawvideo',
+    f'-r {fps:.02f} -s {w}x{h} -pix_fmt {pxfmt} -i - -filter_complex',
+    '[0:v]split[x][z];[x]palettegen[y];[z]fifo[x];[x][y]paletteuse',
+    f'-r {fps:.02f} -f gif -'])
   proc = Popen(cmd.split(' '), stdin=PIPE, stdout=PIPE, stderr=PIPE)
   for image in frames:
     proc.stdin.write(image.tobytes())
-  out, err = proc.communicate()
-  if proc.returncode:
-    raise IOError('\n'.join([' '.join(cmd), err.decode('utf8')]))
-  del proc
-  return out
+  proc.stdin.close()
+  data = proc.stdout.read()
+  proc.wait()
+  return data

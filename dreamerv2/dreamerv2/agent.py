@@ -24,15 +24,6 @@ class Agent(common.Module):
       print(f"RSSM: hidden={config.rssm.hidden}, deter={config.rssm.deter}, stoch={config.rssm.stoch}")
       print(f"Encoder: cnn_depth={config.encoder.get('cnn_depth')}, channels={config.encoder.get('cnn_channels', 'not specified')}")
       print(f"Decoder: cnn_depth={config.decoder.get('cnn_depth')}, channels={config.decoder.get('cnn_channels', 'not specified')}")
-      #wm_params = sum(np.prod(p.shape) for p in self.wm.parameters())
-      #encoder_params = sum(np.prod(p.shape) for p in self.wm.encoder.parameters())
-      #decoder_params = sum(np.prod(p.shape) for p in self.wm.heads['decoder'].parameters())
-      #rssm_params = sum(np.prod(p.shape) for p in self.wm.rssm.parameters())
-      #print(f"World Model Parameters: {wm_params}")
-      #print(f"  - Encoder Parameters: {encoder_params} ({encoder_params/wm_params*100:.1f}%)")
-      #print(f"  - Decoder Parameters: {decoder_params} ({decoder_params/wm_params*100:.1f}%)")
-      #print(f"  - RSSM Parameters: {rssm_params} ({rssm_params/wm_params*100:.1f}%)")
-      #print("=" * 50)
     self._task_behavior = ActorCritic(config, self.act_space, self.tfstep)
     if config.expl_behavior == 'greedy':
       self._expl_behavior = self._task_behavior
@@ -51,93 +42,145 @@ class Agent(common.Module):
 
   @tf.function
   def policy(self, obs, state=None, mode='train'): #Define la política del agente
-    print(f"DEBUG - Agent.policy called in mode: {mode}")
-    if 'image' in obs:
-      print(f"DEBUG - Image shape before preprocess: {obs['image'].shape}")
+    print(f"DEBUG - Agent.policy called - mode: {mode}")
+    print(f"DEBUG - Policy keys in obs: {list(obs.keys())}")
+    print(f"DEBUG - Policy input state: {type(state)}")
+    if state is not None:
+        if isinstance(state, tuple) and len(state) == 2:
+            latent, action = state
+            print(f"DEBUG - Policy input state components: latent type={type(latent)}, action type={type(action)}")
+            print(f"DEBUG - Policy input latent state keys: {list(latent.keys()) if isinstance(latent, dict) else 'Not a dict'}")
+    else:
+        print("DEBUG - Policy input state is None")
+    obs_copy = obs.copy()
+    if state is not None:
+        print(f"DEBUG - Input state type: {[type(s).__name__ for s in state]}")
+        latent, action = state
+        print(f"DEBUG - Input state components: latent shape={latent['stoch'].shape if isinstance(latent, dict) and 'stoch' in latent else 'unknown'}, action shape={action.shape if hasattr(action, 'shape') else 'unknown'}")
+    else:
+        print("DEBUG - Input state is None")
+    
+    if 'action' not in obs_copy and self.act_space is not None:
+        print("DEBUG - Adding missing action key to observations")
+        obs_copy['action'] = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
 
-    if self.config.get('debug_prints', False):
-        print("\n=== POLICY OBSERVATION DEBUG ===")
-        for key, value in obs.items():
-            if hasattr(value, 'shape'):
-                print(f"  Obs key '{key}' shape: {value.shape}")
-                if key == 'image' and len(value.shape) > 2:
-                    # Print unique values in first few channels to help identify mask channels
-                    for i in range(min(value.shape[-1], 6)):
-                        unique_vals = np.unique(value[..., i])
-                        if len(unique_vals) < 10:  # If few unique values, might be a mask
-                            print(f"    Channel {i} unique values: {unique_vals}")
-                        else:
-                            print(f"    Channel {i} value range: {value[..., i].min()} to {value[..., i].max()}")
+    if 'image' in obs_copy:
+        print(f"DEBUG - Policy received image shape: {obs_copy['image'].shape}")
+        if obs_copy['image'].shape[-1] == 2 and self.config.channels_expected == 6:
+            print("DEBUG - Adjusting model to use 2-channel images directly")
+            self.config.channels_expected = 2
+            self.wm.encoder._expected_channels = 2
+            if hasattr(self.wm.heads['decoder'], '_expected_channels'):
+                self.wm.heads['decoder']._expected_channels = 2
 
-    # Add channel adaptation
-    if hasattr(self.config, 'channels_expected') and 'image' in obs:
-        image = obs['image']
-        expected_channels = self.config.channels_expected
-        
-        # If channel count doesn't match expected
-        if image.shape[-1] != expected_channels:
-            print(f"Adapting channels: {image.shape[-1]} -> {expected_channels}")
-            
-            # Case 1: Need more channels (e.g., 1->6)
-            if image.shape[-1] < expected_channels:
-                if image.shape[-1] == 1 and expected_channels == 6:
-                    # Convert grayscale to 6 channels (standard pattern for obj detection)
-                    rgb = np.tile(image, [1, 1, 3])  # Convert to RGB
-                    mask = np.zeros_like(rgb)         # Create empty "mask" channels
-                    obs['image'] = np.concatenate([rgb, mask], axis=-1)
-                else:
-                    # General case: repeat channels as needed
-                    obs['image'] = np.tile(image, [1, 1, expected_channels // image.shape[-1]])
-                    
-            # Case 2: Too many channels (e.g., 6->3) - take first N channels
-            elif image.shape[-1] > expected_channels:
-                obs['image'] = image[..., :expected_channels]
-
-    obs = tf.nest.map_structure(tf.tensor, obs)
-    tf.py_function(lambda: self.tfstep.assign(
-        int(self.step), read_value=False), [], [])
+    obs_copy = tf.nest.map_structure(tf.tensor, obs_copy)
+    tf.py_function(lambda: self.tfstep.assign(int(self.step), read_value=False), [], [])
+    
     if state is None:
-      latent = self.wm.rssm.initial(len(obs['reward']))
-      action = tf.zeros((len(obs['reward']),) + self.act_space.shape)
-      state = latent, action
-    latent, action = state
-    embed = self.wm.encoder(self.wm.preprocess(obs))
+        latent = self.wm.rssm.initial(len(obs_copy['reward']))
+        action = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
+        state = (latent, action)
+    else:
+        if isinstance(state, tuple) and len(state) >= 2:
+            latent, action = state[0], state[1]
+        else:
+            latent = self.wm.rssm.initial(len(obs_copy['reward']))
+            action = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
+            state = (latent, action)
+    
+    embed = self.wm.encoder(self.wm.preprocess(obs_copy))
     print(f"DEBUG - Embedding shape after encoder: {embed.shape}")
     sample = (mode == 'train') or not self.config.eval_state_mean
-    latent, _ = self.wm.rssm.obs_step(
-        latent, action, embed, obs['is_first'], sample)
+    latent, _ = self.wm.rssm.obs_step(latent, action, embed, obs_copy['is_first'], sample)
     feat = self.wm.rssm.get_feat(latent)
+    
+    noise = 0.0
     if mode == 'eval':
-      actor = self._task_behavior.actor(feat)
-      action = actor.mode()
-      noise = self.config.eval_noise
+        actor = self._task_behavior.actor(feat)
+        action = actor.mode()
     elif mode == 'explore':
-      actor = self._expl_behavior.actor(feat)
-      action = actor.sample()
-      noise = self.config.expl_noise
+        actor = self._expl_behavior.actor(feat)
+        action = actor.sample()
+        noise = self.config.expl_noise
     elif mode == 'train':
-      actor = self._task_behavior.actor(feat)
-      action = actor.sample()
-      noise = self.config.expl_noise
+        actor = self._task_behavior.actor(feat)
+        action = actor.sample()
+        noise = self.config.expl_noise
+
     action = common.action_noise(action, noise, self.act_space)
+    print(f"DEBUG - Policy returning action shape: {action.shape}")
+    print(f"DEBUG - Policy returning action values: {action}")
     outputs = {'action': action}
+    print(f"DEBUG - Policy outputs dictionary: {outputs}")
     state = (latent, action)
+    print(f"DEBUG - Policy return state: {type(state)}")
+    if isinstance(state, tuple) and len(state) == 2:
+        latent, action = state
+        print(f"DEBUG - Policy return state components: latent type={type(latent)}, action shape={action.shape if hasattr(action, 'shape') else 'No shape'}")
+        if isinstance(latent, dict):
+            print(f"DEBUG - Policy return latent state keys: {list(latent.keys())}")
+    print(f"DEBUG - Policy return state components: latent shape={latent['stoch'].shape if isinstance(latent, dict) and 'stoch' in latent else 'unknown'}, action shape={action.shape if hasattr(action, 'shape') else 'unknown'}")
+    print(f"DEBUG - Policy final return: outputs={list(outputs.keys())}, state={type(state).__name__}")
     return outputs, state
+
+  def debug_obs_structure(self, obs):
+    """Helper to print detailed structure of observation dictionary."""
+    print("\n=== OBSERVATION STRUCTURE DEBUG ===")
+    print(f"Keys: {list(obs.keys())}")
+    for key, value in obs.items():
+        if hasattr(value, 'shape'):
+            print(f"  {key}: shape={value.shape}, dtype={value.dtype if hasattr(value, 'dtype') else 'unknown'}")
+            if hasattr(value, 'numpy'):
+                try:
+                    arr = value.numpy()
+                    print(f"    min={arr.min()}, max={arr.max()}, mean={arr.mean()}")
+                except:
+                    pass
+        else:
+            print(f"  {key}: type={type(value)}")
+
+  def analyze_image_channels(self, image_tensor):
+    """Analyze image channels outside of tf.function context."""
+    if not hasattr(image_tensor, 'numpy'):
+        return
+        
+    try:
+        image_np = image_tensor.numpy()
+        print("\n=== DETAILED CHANNEL ANALYSIS ===")
+        print(f"Image shape: {image_np.shape}")
+        
+        for i in range(min(image_np.shape[-1], 6)):
+            unique_vals = np.unique(image_np[..., i])
+            if len(unique_vals) < 10:
+                print(f"  Channel {i} unique values: {unique_vals}")
+            else:
+                print(f"  Channel {i} range: {image_np[..., i].min()} to {image_np[..., i].max()}")
+    except Exception as e:
+        print(f"  Error in channel analysis: {e}")
 
   @tf.function
   def train(self, data, state=None): #Entrena el agente
     print(f"DEBUG - Agent train called - Step: {int(self.step)}")
+    
+    data_copy = data.copy()
+    
+    if 'image' in data_copy and data_copy['image'].shape[-1] == 2 and self.config.channels_expected == 6:
+        print("DEBUG - Adjusting model to use 2-channel images directly")
+        self.config.channels_expected = 2
+        self.wm.encoder._expected_channels = 2
+        if hasattr(self.wm.heads['decoder'], '_expected_channels'):
+            self.wm.heads['decoder']._expected_channels = 2
+    
     metrics = {}
-    state, outputs, mets = self.wm.train(data, state)
+    state, outputs, mets = self.wm.train(data_copy, state)
     metrics.update(mets)
     print(f"DEBUG - WorldModel training complete - Loss metrics: {[(k, float(v)) for k, v in mets.items() if 'loss' in k]}")
     start = outputs['post']
     reward = lambda seq: self.wm.heads['reward'](seq['feat']).mode()
-    metrics.update(self._task_behavior.train(
-        self.wm, start, data['is_terminal'], reward))
+    metrics.update(self._task_behavior.train(self.wm, start, data_copy['is_terminal'], reward))
     if self.config.expl_behavior != 'greedy':
-      mets = self._expl_behavior.train(start, outputs, data)[-1]
-      metrics.update({'expl_' + key: value for key, value in mets.items()})
+        mets = self._expl_behavior.train(start, outputs, data_copy)[-1]
+        metrics.update({'expl_' + key: value for key, value in mets.items()})
     return state, metrics
 
   @tf.function
@@ -166,7 +209,7 @@ class WorldModel(common.Module):
     for name in config.grad_heads:
       assert name in self.heads, name
     self.model_opt = common.Optimizer('model', **config.model_opt)
-    self._expected_channels = 6 if config.get('use_obj_detection', False) else 1
+    self._expected_channels = config.channels_expected
     print(f"DEBUG - WorldModel initialized with expected channels: {self._expected_channels}")
 
   def train(self, data, state=None): #Entrena el modelo del mundo, calcula la pérdida del modelo y ¿actualiza las métricas?
@@ -180,7 +223,7 @@ class WorldModel(common.Module):
     return state, outputs, metrics
 
   def loss(self, data, state=None): #Procesa los datos y calcula la pérdida del modelo
-    print("DEBUG - WorldModel.loss - Processing data batch")
+    print(f"DEBUG - WorldModel.loss - Processing data batch")
     for key, value in data.items():
       if hasattr(value, 'shape'):
         print(f"DEBUG - Input data - {key}: shape={value.shape}, dtype={value.dtype}")
@@ -194,9 +237,16 @@ class WorldModel(common.Module):
     likes = {}
     losses = {'kl': kl_loss}
     for name, head in self.heads.items():
+      if name == 'decoder':
+        print(f"DEBUG - Before decoder, feature shape: {feat.shape}")
       grad_head = (name in self.config.grad_heads)
       inp = feat if grad_head else tf.stop_gradient(feat)
       out = head(inp)
+      if name == 'decoder':
+        print(f"DEBUG - After decoder, output keys: {list(out.keys())}")
+        for key, value in out.items():
+          if hasattr(value, 'shape'):
+            print(f"DEBUG - Decoder output['{key}']: shape={value.shape}")
       dists = out if isinstance(out, dict) else {name: out}
       for key, dist in dists.items():
         like = tf.cast(dist.log_prob(data[key]), tf.float32)
@@ -252,6 +302,10 @@ class WorldModel(common.Module):
       if hasattr(value, 'shape'):
         print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
 
+    if 'image' in obs and obs['image'].shape[-1] == 2 and self._expected_channels == 6:
+        print("DEBUG - Adjusting WorldModel expectations to 2 channels")
+        self._expected_channels = 2
+
     dtype = prec.global_policy().compute_dtype
     obs = obs.copy()
     for key, value in obs.items():
@@ -269,10 +323,6 @@ class WorldModel(common.Module):
     }[self.config.clip_rewards](obs['reward'])
     obs['discount'] = 1.0 - obs['is_terminal'].astype(dtype)
     obs['discount'] *= self.config.discount
-
-    if 'image' in obs and obs['image'].shape[-1] == 1 and self._expected_channels == 6:
-      print(f"DEBUG - Adjusting image channels from 1 to {self._expected_channels}")
-      obs['image'] = tf.tile(obs['image'], [1, 1, 1, self._expected_channels])
 
     print("DEBUG - preprocess output shapes:")
     for key, value in obs.items():

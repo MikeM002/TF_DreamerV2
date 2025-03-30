@@ -192,14 +192,56 @@ class Timer:
 
 
 class CarryOverState:
+    def __init__(self, fn):
+        self._fn = fn
+        self._state = None
+        self._name = fn.__name__ if hasattr(fn, '__name__') else 'unknown'
+        print(f"DEBUG - CarryOverState initialized for function: {self._name}")
 
-  def __init__(self, fn):
-    self._fn = fn
-    self._state = None
+    def __call__(self, *args):
+        print(f"DEBUG - CarryOverState({self._name}) called with arg types: {[type(a).__name__ for a in args]}")
+        print(f"DEBUG - CarryOverState({self._name}) current state type: {type(self._state).__name__ if self._state is not None else 'None'}")
+        if self._state is not None:
+            if isinstance(self._state, tuple) and len(self._state) == 2:
+                latent, action = self._state
+                print(f"DEBUG - CarryOverState state structure: (latent:{type(latent).__name__}, action:{type(action).__name__})")
+                if isinstance(latent, dict):
+                    print(f"DEBUG - CarryOverState latent keys: {list(latent.keys())}")
+                if hasattr(action, 'shape'):
+                    print(f"DEBUG - CarryOverState action shape: {action.shape}")
+        result = self._fn(*args, self._state)
+        print(f"DEBUG - CarryOverState({self._name}) raw result type: {type(result).__name__}")
+        
+        if isinstance(result, tuple) and len(result) == 2:
+            out, new_state = result
+            print(f"DEBUG - CarryOverState({self._name}) unpacked result: out={type(out).__name__}, state={type(new_state).__name__}")
+            if new_state is not None:
+                print(f"DEBUG - CarryOverState({self._name}) new state structure check:")
+                if isinstance(new_state, tuple) and len(new_state) == 2:
+                    latent, action = new_state
+                    print(f"DEBUG - New state is tuple with elements: {type(latent).__name__}, {type(action).__name__}")
+                    self._state = new_state
+                elif isinstance(new_state, dict):
+                    print(f"DEBUG - New state is dict with keys: {list(new_state.keys())}")
+                    self._state = new_state
+                else:
+                    print(f"WARNING - Unexpected state structure: {type(new_state).__name__}")
+                    print("DEBUG - Keeping previous state due to unexpected format")
+            else:
+                print(f"WARNING - Received None state")
+        else:
+            print(f"WARNING - Unexpected result format: {type(result).__name__}")
 
-  def __call__(self, *args):
-    self._state, out = self._fn(*args, self._state)
-    return out
+        
+        print(f"DEBUG - CarryOverState({self._name}) new state type: {type(self._state).__name__ if self._state is not None else 'None'}")
+        if isinstance(out, dict):
+            print(f"DEBUG - CarryOverState({self._name}) output keys: {list(out.keys())}")
+            if 'action' in out:
+                action = out['action']
+                print(f"DEBUG - CarryOverState({self._name}) action type: {type(action).__name__}")
+                print(f"DEBUG - CarryOverState({self._name}) action shape: {action.shape if hasattr(action, 'shape') else 'no shape'}")
+                print(f"DEBUG - CarryOverState({self._name}) action values: {action}")
+        return out
 
 
 def debug_print(config, *args, **kwargs):

@@ -428,11 +428,25 @@ class OneHotAction:
     return {**self._env.act_space, self._key: space}
 
   def step(self, action):
+    print(f"DEBUG - OneHotAction.step - Received action type: {type(action).__name__}")
+    print(f"DEBUG - OneHotAction.step - Keys in action dict: {list(action.keys()) if isinstance(action, dict) else 'NOT A DICT'}")
+    if self._key not in action:
+        print(f"ERROR - OneHotAction missing key '{self._key}' in action dict")
+    else:
+        action_vector = action[self._key]
+        print(f"DEBUG - OneHotAction - Vector shape: {action_vector.shape if hasattr(action_vector, 'shape') else 'no shape'}")
+        print(f"DEBUG - OneHotAction - Vector values: {action_vector}")
+        index = np.argmax(action_vector).astype(int)
+        print(f"DEBUG - OneHotAction - Selected index: {index}")
+        reference = np.zeros_like(action_vector)
+        reference[index] = 1
+        if not np.allclose(reference, action_vector):
+            print(f"ERROR - OneHotAction - Invalid one-hot format: vector={action_vector}, index={index}, reference={reference}")
     index = np.argmax(action[self._key]).astype(int)
     reference = np.zeros_like(action[self._key])
     reference[index] = 1
     if not np.allclose(reference, action[self._key]):
-      raise ValueError(f'Invalid one-hot action:\n{action}')
+        raise ValueError(f'Invalid one-hot action:\n{action}')
     return self._env.step({**action, self._key: index})
 
   def reset(self):
@@ -677,8 +691,14 @@ class ObjectDetectionWrapper:
                     print(f"  Template {i}: shape={template.shape}")
                 else:
                     print(f"  Template {i}: {type(template)}")
+        elif hasattr(self.detector, 'template') and self.detector.template is not None:
+            print(f"\nDetector has template with shape: {self.detector.template.shape}")
         else:
-            print("\nNo templates found in detector")
+            print("\nNo template found in detector")
+            
+        # Pre-determine the output channel count (do this only once)
+        self._output_channels = self._determine_output_channels()
+        print(f"  Preprocessed output will have {self._output_channels} channels")
         print("="*50)
         
         # Handle both gym-style and DreamerV2-style environments
@@ -700,7 +720,8 @@ class ObjectDetectionWrapper:
             self.reward_range = self._env.reward_range
         if hasattr(self._env, 'metadata'):
             self.metadata = self._env.metadata
-
+    
+    
     def __getattr__(self, name):
         """Forward unknown attributes to the wrapped environment."""
         if name.startswith('_'):
@@ -717,100 +738,78 @@ class ObjectDetectionWrapper:
         """Property to match DreamerV2's environment interface."""
         return self._obs_space
 
+            
+    def _determine_output_channels(self):
+        """Determine the number of output channels without full processing."""
+        # Create a minimal test image (1x1 pixel is enough to determine channels)
+        test_image = np.zeros((1, 1, 1), dtype=np.uint8)
+        test_obs = {'image': test_image}
+        
+        # Set a flag to suppress prints during this test processing
+        self._suppress_prints = True
+        processed = self._process_obs(test_obs)
+        self._suppress_prints = False
+        
+        # Return the number of channels in the processed output
+        return processed['image'].shape[-1]
+
     def _update_obs_space(self):
-        """Update DreamerV2-style observation space."""
+        """Update DreamerV2-style observation space using pre-determined channel count."""
         spaces = dict(self._env.obs_space)
         
+        print(f"\n==== UPDATING OBS SPACE ====")
         if 'image' in spaces:
-            if len(spaces['image'].shape) > 1:  # Make sure it's an image
-                # Calculate the output shape based on input shape
-                if len(spaces['image'].shape) == 3:
-                    input_channels = spaces['image'].shape[-1]
-                    if input_channels == 1:
-                        # For grayscale, we'll convert to RGB + mask (6 channels)
-                        shape = self.process_size + (6,)  # 3 channels for RGB image + 3 for mask
-                    else:
-                        # For RGB, we'll have 6 channels (3 for image + 3 for mask)
-                        shape = self.process_size + (6,)
-                else:
-                    # Fallback for 2D images
-                    shape = self.process_size + (2,)  # 2 channels
-                    
-                spaces['image'] = gym.spaces.Box(0, 255, shape, dtype=np.uint8)
+            input_shape = spaces['image'].shape
+            print(f"Input observation shape: {input_shape}")
+            
+            if len(input_shape) > 1:  # Make sure it's an image
+                # Use the pre-computed channel count determined during initialization
+                shape = self.process_size + (self._output_channels,)
+                print(f"Using pre-determined channel count: {self._output_channels}")
                 
+                spaces['image'] = gym.spaces.Box(0, 255, shape, dtype=np.uint8)
+                print(f"Updated observation space shape: {spaces['image'].shape}")
+        
+        print("==== OBS SPACE UPDATE COMPLETE ====\n")
         return spaces
 
     def _update_observation_space(self):
-        """Update gym-style observation space to include the mask channel."""
+        """Update gym-style observation space to match actual output format."""
         import gym
         from gym.spaces import Box
         
+        print(f"\n==== UPDATING GYM OBSERVATION SPACE ====")
         obs_space = self._env.observation_space
         
-        # If it's not a Dict space, assume it's a Box space with image observations
-        if isinstance(obs_space, gym.spaces.Dict):
-            updated_spaces = {}
-            for key, space in obs_space.spaces.items():
-                if key == 'image':  # Only update the image part
-                    low = np.zeros((*self.process_size, 2), dtype=np.float32)
-                    high = np.ones((*self.process_size, 2), dtype=np.float32)
-                    updated_spaces[key] = Box(low=low, high=high, dtype=np.float32)
-                else:
-                    updated_spaces[key] = space
-            return gym.spaces.Dict(updated_spaces)
-        else:  # Assuming Box space
-            low = np.zeros((*self.process_size, 2), dtype=np.float32)
-            high = np.ones((*self.process_size, 2), dtype=np.float32)
-            return Box(low=low, high=high, dtype=np.float32)
-
-    def _process_obs(self, obs):
-        """Process observation to add object detection mask."""
-        import numpy as np
-        
-        print("\nPROCESSING OBSERVATION:")
-        if isinstance(obs, dict) and 'image' in obs:
-            print(f"  Original image shape: {obs['image'].shape}")
-            print(f"  Image dtype: {obs['image'].dtype}")
-            print(f"  Image min/max values: {np.min(obs['image'])}/{np.max(obs['image'])}")
-            
-            # Get the original image
-            original_image = obs['image']
-            
-            # Process the image with object detection
-            import time
-            start_time = time.time()
-            result, confidence, mask, positions = self.detector.process_and_resize(original_image)
-            detection_time = time.time() - start_time
-            
-            print(f"  Detection took {detection_time*1000:.1f}ms")
-            print(f"  Mask shape: {mask.shape if mask is not None else 'None'}")
-            
-            if positions is not None and len(positions) > 0:
-                print(f"  Detected positions: {positions}")
-            
-            # Debug mask statistics
-            if mask is not None:
-                mask_unique = np.unique(mask)
-                print(f"  Mask unique values: {mask_unique}")
-                print(f"  Mask dtype: {mask.dtype}")
-            
-            # Resize both the original image and the mask to process_size (64x64)
-            small_original = self._resize(original_image, self.process_size)
-            small_mask = self._resize(mask, self.process_size)
-            
-            # Ensure both arrays have 3 dimensions before concatenation
-            if len(small_original.shape) == 2:
-                small_original = small_original[..., None]  # Add channel dimension
-                
-            if len(small_mask.shape) == 2:
-                small_mask = small_mask[..., None]  # Add channel dimension
-                
-            # Concatenate the resized original image and mask (both now have 3 dimensions)
-            combined = np.concatenate([small_original, small_mask], axis=-1)
-            obs['image'] = combined
+        # Get input space information
+        if isinstance(obs_space, gym.spaces.Dict) and 'image' in obs_space.spaces:
+            input_space = obs_space.spaces['image']
+            input_shape = input_space.shape
+            print(f"Input observation space: Dict with image shape {input_shape}")
+        elif not isinstance(obs_space, gym.spaces.Dict):
+            input_shape = obs_space.shape
+            print(f"Input observation space: Box with shape {input_shape}")
         else:
-            print("  Observation is not a dictionary with 'image' key")
-        return obs
+            print(f"Input observation space: {obs_space} (no image found)")
+            return obs_space
+            
+        # Use the same dynamically determined channel count
+        print(f"Using pre-determined output channel count: {self._output_channels}")
+        output_shape = self.process_size + (self._output_channels,)
+        
+        # Create appropriate space type
+        if isinstance(obs_space, gym.spaces.Dict):
+            spaces = {k: v for k, v in obs_space.spaces.items()}
+            spaces['image'] = Box(0, 255, output_shape, dtype=np.uint8)
+            result = gym.spaces.Dict(spaces)
+            print(f"Updated 'image' in Dict to shape {output_shape}")
+        else:
+            # Direct Box space
+            result = Box(0, 255, output_shape, dtype=np.uint8)
+            print(f"Updated Box space to shape {output_shape}")
+        
+        print("==== GYM OBSERVATION SPACE UPDATE COMPLETE ====\n")
+        return result
 
     def _resize(self, image, size):
         """Resize an image to the given size."""
@@ -834,6 +833,62 @@ class ObjectDetectionWrapper:
             resized = resized[..., np.newaxis]
         
         return resized
+
+    def _process_obs(self, obs):
+        """Process observation to add object detection mask."""
+        import numpy as np
+        
+        # Skip printing during channel detection
+        if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+            print("\nPROCESSING OBSERVATION:")
+            
+        if isinstance(obs, dict) and 'image' in obs:
+            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+                print(f"  Original image shape: {obs['image'].shape}")
+                print(f"  Image dtype: {obs['image'].dtype}")
+                print(f"  Image min/max values: {np.min(obs['image'])}/{np.max(obs['image'])}")
+            
+            # Get the original image
+            original_image = obs['image']
+            
+            # Process the image with object detection
+            import time
+            start_time = time.time()
+            result, confidence, mask, positions = self.detector.process_and_resize(original_image)
+            detection_time = time.time() - start_time
+            
+            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+                print(f"  Detection took {detection_time*1000:.1f}ms")
+                print(f"  Mask shape: {mask.shape if mask is not None else 'None'}")
+                
+                # Debug mask statistics
+                if mask is not None:
+                    mask_unique = np.unique(mask)
+                    print(f"  Mask unique values: {mask_unique}")
+                    print(f"  Mask dtype: {mask.dtype}")
+            
+            # Resize both the original image and the mask
+            small_original = self._resize(original_image, self.process_size)
+            small_mask = self._resize(mask, self.process_size) if mask is not None else np.zeros((*self.process_size, 1), dtype=np.uint8)
+            
+            # Ensure both arrays have 3 dimensions before concatenation
+            if len(small_original.shape) == 2:
+                small_original = small_original[..., None]  # Add channel dimension
+                
+            if len(small_mask.shape) == 2:
+                small_mask = small_mask[..., None]  # Add channel dimension
+                
+            # Concatenate the resized original image and mask (both now have 3 dimensions)
+            combined = np.concatenate([small_original, small_mask], axis=-1)
+            
+            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+                print(f"  Final combined shape: {combined.shape}")
+                
+            obs['image'] = combined
+        elif not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+            print("  Observation is not a dictionary with 'image' key")
+            
+        return obs
 
     def reset(self):
         obs = self._env.reset()

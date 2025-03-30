@@ -33,7 +33,7 @@ defaults:
   precision: 16
   jit: True
   debug_prints: True
-  channels_expected: 2  # Default to 6 channels for object detection
+  channels_expected: 2  # No default config, it depends purely in amount of objetcs
 
   # Agent
   clip_rewards: tanh
@@ -91,7 +91,7 @@ atari:
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 100
   action_repeat: 4
-  steps: 100000
+  steps: 1000
   eval_every: 300
   log_every: 300
   prefill: 100
