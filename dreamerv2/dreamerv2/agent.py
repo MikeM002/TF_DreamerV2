@@ -42,37 +42,63 @@ class Agent(common.Module):
 
   @tf.function
   def policy(self, obs, state=None, mode='train'):
+    """Process input observation to produce an action.
+    
+    Args:
+      obs: Dict of observations with at least 'reward' key
+      state: Optional tuple of (latent, action) from previous call
+      mode: One of 'train', 'eval', or 'explore'
+      
+    Returns:
+      Dict with 'action' key and updated state tuple
+    """
+    # Initialize state if None
     if state is None:
-        # Initialize latent state if None
-        batch_size = len(obs['reward'])
+        batch_size = tf.shape(obs['reward'])[0]
         latent = self.wm.rssm.initial(batch_size)
         action = tf.zeros((batch_size, self.act_space.shape[0]), self.act_space.dtype)
         state = (latent, action)
     
     # Ensure obs has action
-    if 'action' not in obs:
-        obs = obs.copy()
-        obs['action'] = tf.zeros(
-            (len(obs['reward']), self.act_space.shape[0]), self.act_space.dtype)
+    obs_dict = obs.copy()
+    if 'action' not in obs_dict:
+        batch_size = tf.shape(obs_dict['reward'])[0]
+        obs_dict['action'] = tf.zeros((batch_size, self.act_space.shape[0]), self.act_space.dtype)
     
-    latent, action = state  # Unpack state tuple
-    embed = self.wm.encoder(self.wm.preprocess(obs))
-    latent, _ = self.wm.rssm.obs_step(latent, action, embed, obs['is_first'])
+    # Unpack state - explicitly handle both tuple and dict formats
+    if isinstance(state, tuple) and len(state) == 2:
+        latent, action = state
+    else:
+        # If state isn't a proper tuple, reinitialize it
+        batch_size = tf.shape(obs_dict['reward'])[0]
+        latent = self.wm.rssm.initial(batch_size)
+        action = tf.zeros((batch_size, self.act_space.shape[0]), self.act_space.dtype)
     
+    # Process observation with world model
+    embed = self.wm.encoder(self.wm.preprocess(obs_dict))
+    latent, _ = self.wm.rssm.obs_step(latent, action, embed, obs_dict['is_first'])
+    
+    # Extract features from latent state
+    feat = self.wm.rssm.get_feat(latent)
+    
+    # Use the appropriate behavior based on mode
     if mode == 'eval':
-        actor = self._task_behavior.actor(latent)
+        actor = self._task_behavior.actor(feat)
         action = actor.mode()
     elif mode == 'explore':
-        actor = self._expl_behavior.actor(latent)
+        actor = self._expl_behavior.actor(feat)
         action = actor.sample()
     else:
-        actor = self._task_behavior.actor(latent)
+        actor = self._task_behavior.actor(feat)
         action = actor.sample()
     
-    action = tf.cast(action, self.act_space.dtype)  # Ensure correct dtype
-    state = (latent, action)  # Pack state tuple
+    # Ensure action has the correct dtype
+    action = tf.cast(action, self.act_space.dtype)
     
-    return {'action': action}, state  # Always return both action dict and state
+    # Pack state for next call
+    state = (latent, action)
+    
+    return {'action': action}, state
 
   def debug_obs_structure(self, obs):
     """Helper to print detailed structure of observation dictionary."""

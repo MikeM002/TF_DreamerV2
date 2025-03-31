@@ -514,11 +514,18 @@ def main():
               step_start = time.time()
               for _ in range(config.train_steps):
                   data_batch = next(train_dataset)
-                  mets = train_agent(data_batch)
+                  mets_tuple = train_agent(data_batch)
+                  # Properly unpack the tuple returned by CarryOverState
+                  if isinstance(mets_tuple, tuple) and len(mets_tuple) == 2:
+                      mets, _ = mets_tuple  # Extract just the metrics, ignore the state
+                  else:
+                      mets = mets_tuple  # In case it's not a tuple (fallback)
+                  # Now update the metrics
                   [metrics[key].append(value) for key, value in mets.items()]
               step_times.append(time.time() - step_start)
           if should_log(step):
-              metric_values = {name: np.array(values, np.float64).mean() for name, values in metrics.items() if values}
+              metric_values = {name: np.array(values, np.float64).mean() 
+                              for name, values in metrics.items() if values}
               metrics.clear()
               print_debug(f"Logging metrics at step {step.value}", metrics=metric_values)
               logger.add(agnt.report(next(report_dataset)), prefix='train')

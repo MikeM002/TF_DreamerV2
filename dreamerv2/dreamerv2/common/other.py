@@ -201,46 +201,34 @@ class CarryOverState:
     def __call__(self, *args):
         print(f"DEBUG - CarryOverState({self._name}) called with arg types: {[type(a).__name__ for a in args]}")
         print(f"DEBUG - CarryOverState({self._name}) current state type: {type(self._state).__name__ if self._state is not None else 'None'}")
-        if self._state is not None:
-            if isinstance(self._state, tuple) and len(self._state) == 2:
-                latent, action = self._state
-                print(f"DEBUG - CarryOverState state structure: (latent:{type(latent).__name__}, action:{type(action).__name__})")
-                if isinstance(latent, dict):
-                    print(f"DEBUG - CarryOverState latent keys: {list(latent.keys())}")
-                if hasattr(action, 'shape'):
-                    print(f"DEBUG - CarryOverState action shape: {action.shape}")
-        result = self._fn(*args, self._state)
         
+        # Call the function with the stored state
+        try:
+            result = self._fn(*args, self._state)
+        except Exception as e:
+            print(f"ERROR in {self._name}: {str(e)}")
+            # Handle the error by reinitializing state and trying again
+            self._state = None
+            result = self._fn(*args, self._state)
+        
+        # Properly unpack and store the result
         if isinstance(result, tuple) and len(result) == 2:
             out, new_state = result
             print(f"DEBUG - CarryOverState({self._name}) unpacked result: out={type(out).__name__}, state={type(new_state).__name__}")
+            
+            # Only update state if we got a valid new state
             if new_state is not None:
+                self._state = new_state
                 print(f"DEBUG - CarryOverState({self._name}) new state structure check:")
-                if isinstance(new_state, tuple) and len(new_state) == 2:
-                    latent, action = new_state
-                    print(f"DEBUG - New state is tuple with elements: {type(latent).__name__}, {type(action).__name__}")
-                    self._state = new_state
-                elif isinstance(new_state, dict):
+                if isinstance(new_state, dict):
                     print(f"DEBUG - New state is dict with keys: {list(new_state.keys())}")
-                    self._state = new_state
-                else:
-                    print(f"WARNING - Unexpected state structure: {type(new_state).__name__}")
-                    print("DEBUG - Keeping previous state due to unexpected format")
-            else:
-                print(f"WARNING - Received None state")
-            return out, self._state  # Devolver tanto el output como el state
+                elif isinstance(new_state, tuple) and len(new_state) > 0:
+                    print(f"DEBUG - New state is tuple with {len(new_state)} elements")
+            
+            return out, self._state
         else:
-            print(f"WARNING - Unexpected result format: {type(result).__name__}")
-            return result, self._state  # Asegurar que siempre devolvemos una tupla
-
-        print(f"DEBUG - CarryOverState({self._name}) new state type: {type(self._state).__name__ if self._state is not None else 'None'}")
-        if isinstance(out, dict):
-            print(f"DEBUG - CarryOverState({self._name}) output keys: {list(out.keys())}")
-            if 'action' in out:
-                action = out['action']
-                print(f"DEBUG - CarryOverState({self._name}) action type: {type(action).__name__}")
-                print(f"DEBUG - CarryOverState({self._name}) action shape: {action.shape if hasattr(action, 'shape') else 'no shape'}")
-                print(f"DEBUG - CarryOverState({self._name}) action values: {action}")
+            print(f"WARNING - Unexpected result format from {self._name}: {type(result).__name__}")
+            return result, self._state
 
 
 def debug_print(config, *args, **kwargs):
