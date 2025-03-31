@@ -210,7 +210,6 @@ class CarryOverState:
                 if hasattr(action, 'shape'):
                     print(f"DEBUG - CarryOverState action shape: {action.shape}")
         result = self._fn(*args, self._state)
-        print(f"DEBUG - CarryOverState({self._name}) raw result type: {type(result).__name__}")
         
         if isinstance(result, tuple) and len(result) == 2:
             out, new_state = result
@@ -229,10 +228,11 @@ class CarryOverState:
                     print("DEBUG - Keeping previous state due to unexpected format")
             else:
                 print(f"WARNING - Received None state")
+            return out, self._state  # Devolver tanto el output como el state
         else:
             print(f"WARNING - Unexpected result format: {type(result).__name__}")
+            return result, self._state  # Asegurar que siempre devolvemos una tupla
 
-        
         print(f"DEBUG - CarryOverState({self._name}) new state type: {type(self._state).__name__ if self._state is not None else 'None'}")
         if isinstance(out, dict):
             print(f"DEBUG - CarryOverState({self._name}) output keys: {list(out.keys())}")
@@ -241,7 +241,6 @@ class CarryOverState:
                 print(f"DEBUG - CarryOverState({self._name}) action type: {type(action).__name__}")
                 print(f"DEBUG - CarryOverState({self._name}) action shape: {action.shape if hasattr(action, 'shape') else 'no shape'}")
                 print(f"DEBUG - CarryOverState({self._name}) action values: {action}")
-        return out
 
 
 def debug_print(config, *args, **kwargs):

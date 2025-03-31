@@ -41,87 +41,38 @@ class Agent(common.Module):
         print(f"DEBUG: {name} has no shape attribute")
 
   @tf.function
-  def policy(self, obs, state=None, mode='train'): #Define la política del agente
-    print(f"DEBUG - Agent.policy called - mode: {mode}")
-    print(f"DEBUG - Policy keys in obs: {list(obs.keys())}")
-    print(f"DEBUG - Policy input state: {type(state)}")
-    if state is not None:
-        if isinstance(state, tuple) and len(state) == 2:
-            latent, action = state
-            print(f"DEBUG - Policy input state components: latent type={type(latent)}, action type={type(action)}")
-            print(f"DEBUG - Policy input latent state keys: {list(latent.keys()) if isinstance(latent, dict) else 'Not a dict'}")
-    else:
-        print("DEBUG - Policy input state is None")
-    obs_copy = obs.copy()
-    if state is not None:
-        print(f"DEBUG - Input state type: {[type(s).__name__ for s in state]}")
-        latent, action = state
-        print(f"DEBUG - Input state components: latent shape={latent['stoch'].shape if isinstance(latent, dict) and 'stoch' in latent else 'unknown'}, action shape={action.shape if hasattr(action, 'shape') else 'unknown'}")
-    else:
-        print("DEBUG - Input state is None")
-    
-    if 'action' not in obs_copy and self.act_space is not None:
-        print("DEBUG - Adding missing action key to observations")
-        obs_copy['action'] = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
-
-    if 'image' in obs_copy:
-        print(f"DEBUG - Policy received image shape: {obs_copy['image'].shape}")
-        if obs_copy['image'].shape[-1] == 2 and self.config.channels_expected == 6:
-            print("DEBUG - Adjusting model to use 2-channel images directly")
-            self.config.channels_expected = 2
-            self.wm.encoder._expected_channels = 2
-            if hasattr(self.wm.heads['decoder'], '_expected_channels'):
-                self.wm.heads['decoder']._expected_channels = 2
-
-    obs_copy = tf.nest.map_structure(tf.tensor, obs_copy)
-    tf.py_function(lambda: self.tfstep.assign(int(self.step), read_value=False), [], [])
-    
+  def policy(self, obs, state=None, mode='train'):
     if state is None:
-        latent = self.wm.rssm.initial(len(obs_copy['reward']))
-        action = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
+        # Initialize latent state if None
+        batch_size = len(obs['reward'])
+        latent = self.wm.rssm.initial(batch_size)
+        action = tf.zeros((batch_size, self.act_space.shape[0]), self.act_space.dtype)
         state = (latent, action)
-    else:
-        if isinstance(state, tuple) and len(state) >= 2:
-            latent, action = state[0], state[1]
-        else:
-            latent = self.wm.rssm.initial(len(obs_copy['reward']))
-            action = tf.zeros((len(obs_copy['reward']),) + self.act_space.shape)
-            state = (latent, action)
     
-    embed = self.wm.encoder(self.wm.preprocess(obs_copy))
-    print(f"DEBUG - Embedding shape after encoder: {embed.shape}")
-    sample = (mode == 'train') or not self.config.eval_state_mean
-    latent, _ = self.wm.rssm.obs_step(latent, action, embed, obs_copy['is_first'], sample)
-    feat = self.wm.rssm.get_feat(latent)
+    # Ensure obs has action
+    if 'action' not in obs:
+        obs = obs.copy()
+        obs['action'] = tf.zeros(
+            (len(obs['reward']), self.act_space.shape[0]), self.act_space.dtype)
     
-    noise = 0.0
+    latent, action = state  # Unpack state tuple
+    embed = self.wm.encoder(self.wm.preprocess(obs))
+    latent, _ = self.wm.rssm.obs_step(latent, action, embed, obs['is_first'])
+    
     if mode == 'eval':
-        actor = self._task_behavior.actor(feat)
+        actor = self._task_behavior.actor(latent)
         action = actor.mode()
     elif mode == 'explore':
-        actor = self._expl_behavior.actor(feat)
+        actor = self._expl_behavior.actor(latent)
         action = actor.sample()
-        noise = self.config.expl_noise
-    elif mode == 'train':
-        actor = self._task_behavior.actor(feat)
+    else:
+        actor = self._task_behavior.actor(latent)
         action = actor.sample()
-        noise = self.config.expl_noise
-
-    action = common.action_noise(action, noise, self.act_space)
-    print(f"DEBUG - Policy returning action shape: {action.shape}")
-    print(f"DEBUG - Policy returning action values: {action}")
-    outputs = {'action': action}
-    print(f"DEBUG - Policy outputs dictionary: {outputs}")
-    state = (latent, action)
-    print(f"DEBUG - Policy return state: {type(state)}")
-    if isinstance(state, tuple) and len(state) == 2:
-        latent, action = state
-        print(f"DEBUG - Policy return state components: latent type={type(latent)}, action shape={action.shape if hasattr(action, 'shape') else 'No shape'}")
-        if isinstance(latent, dict):
-            print(f"DEBUG - Policy return latent state keys: {list(latent.keys())}")
-    print(f"DEBUG - Policy return state components: latent shape={latent['stoch'].shape if isinstance(latent, dict) and 'stoch' in latent else 'unknown'}, action shape={action.shape if hasattr(action, 'shape') else 'unknown'}")
-    print(f"DEBUG - Policy final return: outputs={list(outputs.keys())}, state={type(state).__name__}")
-    return outputs, state
+    
+    action = tf.cast(action, self.act_space.dtype)  # Ensure correct dtype
+    state = (latent, action)  # Pack state tuple
+    
+    return {'action': action}, state  # Always return both action dict and state
 
   def debug_obs_structure(self, obs):
     """Helper to print detailed structure of observation dictionary."""
