@@ -1,5 +1,5 @@
 @echo off
-set PROJECT_PATH=C:\Users\cuent\DV2_again_bro\dv0\TF_DreamerV2\dreamerv2
+set PROJECT_PATH=C:\Users\cuent\DV2_again_bro\dv0\dreamerv2
 
 :inicio
 docker run -it --rm --gpus all ^

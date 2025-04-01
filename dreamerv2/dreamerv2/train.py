@@ -155,7 +155,7 @@ def ensure_channel_consistency(config, train_env, eval_env):
 
 def main():
 
-  print("-"*100,"Version:",24)
+  print("-"*100,"Version:",33)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
@@ -484,25 +484,7 @@ def main():
   last_checkpoint_time = loop_start_time
   step_times = []
 
-  while step < config.steps:
-      block_start_time = time.time()
-
-      # Evaluation phase
-      print_debug(f"Starting evaluation at step {step.value}/{config.steps}", separator=True)
-      eval_start = time.time()
-      eval_driver(eval_policy, episodes=config.eval_eps)
-      eval_duration = time.time() - eval_start
-      print_debug(f"Evaluation completed in {eval_duration:.2f}s")
-
-
-      # Training phase
-      print_debug(f"Starting training block at step {step.value}/{config.steps}", separator=True)
-      block_target = min(step.value + config.eval_every, config.steps)
-
-      
-      train_start = time.time()
-
-      def train_step_with_tracking(tran, worker):
+  def train_step_with_tracking(tran, worker):
           if should_train(step):
               if step.value % max(1, config.log_every // 10) == 0:
                   track_training_progress(tran, step.value, config)
@@ -531,38 +513,51 @@ def main():
               logger.add(agnt.report(next(report_dataset)), prefix='train')
               logger.write(fps=True)
 
-      original_on_steps = train_driver._on_steps.copy()
-      train_driver._on_steps = []  # Clear existing on_step callbacks
-      train_driver.on_step(train_step_with_tracking)  # Add our tracking callback
-      train_driver(train_policy, steps=config.eval_every)
-      train_driver._on_steps = original_on_steps  # Restore original callbacks
+  while step < config.steps:
+      block_start_time = time.time()
+      block_target = min(step.value + config.eval_every, config.steps)
 
-      train_duration = time.time() - train_start
-      print_debug(f"Training block completed in {train_duration:.2f}s")
+      # =========== EVALUATION PHASE ===========
+      print(f"\n{'=' * 20} EVALUATION PHASE {'=' * 20}")
+      print(f"Step {step.value}/{config.steps} - Starting evaluation with {config.eval_eps} episodes")
       
-      # Save checkpoint every 15 minutes or at the specified interval
+      eval_start = time.time()
+      eval_driver(eval_policy, episodes=config.eval_eps)
+      eval_duration = time.time() - eval_start
+      print(f"Evaluation completed in {eval_duration:.2f}s")
+
+      # =========== TRAINING PHASE ===========
+      print(f"\n{'=' * 20} TRAINING PHASE {'=' * 20}")
+      print(f"Step {step.value}/{config.steps} - Training until step {block_target}")
+      
+      train_start = time.time()
+      train_driver(train_policy, steps=config.eval_every)
+      train_duration = time.time() - train_start
+      print(f"Training block completed in {train_duration:.2f}s")
+
+      # =========== CHECKPOINT PHASE ===========
       current_time = time.time()
       checkpoint_interval = config.get('checkpoint_interval_minutes', 15) * 60
       if current_time - last_checkpoint_time > checkpoint_interval:
-          print_debug(f"Saving checkpoint at step {step.value}")
+          print(f"\n{'=' * 20} SAVING CHECKPOINT {'=' * 20}")
+          print(f"Saving checkpoint at step {step.value}")
           try:
               agnt.save(logdir / 'variables.pkl')
               last_checkpoint_time = current_time
-              print_debug("Checkpoint saved successfully")
+              print("Checkpoint saved successfully")
           except Exception as e:
-              print_debug(f"Error saving checkpoint: {str(e)}")
+              print(f"Error saving checkpoint: {str(e)}")
 
+      # =========== BLOCK SUMMARY ===========
       block_duration = time.time() - block_start_time
       total_duration = time.time() - loop_start_time
-      print_debug(
-          f"Completed block: {step.value}/{config.steps} steps",
-          separator=True,
-          metrics={
-              "block_duration_minutes": block_duration / 60,
-              "total_duration_minutes": total_duration / 60,
-              "steps_per_second": config.eval_every / block_duration if block_duration > 0 else 0
-          }
-      )
+      
+      print(f"\n{'=' * 20} BLOCK SUMMARY {'=' * 20}")
+      print(f"Completed block: {step.value}/{config.steps} steps")
+      print(f"Block duration: {block_duration/60:.2f} minutes")
+      print(f"Total duration: {total_duration/60:.2f} minutes")
+      print(f"Steps per second: {config.eval_every/block_duration:.2f}")
+      print(f"Est. completion: {time.strftime('%H:%M:%S', time.localtime(time.time() + (config.steps - step.value) * block_duration / config.eval_every))}")
 
   # Final checkpoint
   try:

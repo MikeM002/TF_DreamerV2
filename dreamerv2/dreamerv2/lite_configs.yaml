@@ -91,10 +91,10 @@ atari:
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 100
   action_repeat: 4
-  steps: 1000
+  steps: 5000
   eval_every: 300
   log_every: 300
-  prefill: 100
+  prefill: 1000
   train_every: 16
   clip_rewards: tanh
   rssm: {hidden: 2, deter: 2}

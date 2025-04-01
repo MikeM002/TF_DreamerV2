@@ -141,12 +141,14 @@ class Agent(common.Module):
     
     data_copy = data.copy()
     
+    '''
     if 'image' in data_copy and data_copy['image'].shape[-1] == 2 and self.config.channels_expected == 6:
         print("DEBUG - Adjusting model to use 2-channel images directly")
         self.config.channels_expected = 2
         self.wm.encoder._expected_channels = 2
         if hasattr(self.wm.heads['decoder'], '_expected_channels'):
             self.wm.heads['decoder']._expected_channels = 2
+    '''
     
     metrics = {}
     state, outputs, mets = self.wm.train(data_copy, state)

@@ -428,16 +428,17 @@ class OneHotAction:
     return {**self._env.act_space, self._key: space}
 
   def step(self, action):
-    print(f"DEBUG - OneHotAction.step - Received action type: {type(action).__name__}")
-    print(f"DEBUG - OneHotAction.step - Keys in action dict: {list(action.keys()) if isinstance(action, dict) else 'NOT A DICT'}")
+    #print(f"DEBUG - OneHotAction.step - Received action type: {type(action).__name__}")
+    #print(f"DEBUG - OneHotAction.step - Keys in action dict: {list(action.keys()) if isinstance(action, dict) else 'NOT A DICT'}")
     if self._key not in action:
-        print(f"ERROR - OneHotAction missing key '{self._key}' in action dict")
+        pass
+        #print(f"ERROR - OneHotAction missing key '{self._key}' in action dict")
     else:
         action_vector = action[self._key]
-        print(f"DEBUG - OneHotAction - Vector shape: {action_vector.shape if hasattr(action_vector, 'shape') else 'no shape'}")
-        print(f"DEBUG - OneHotAction - Vector values: {action_vector}")
+        #print(f"DEBUG - OneHotAction - Vector shape: {action_vector.shape if hasattr(action_vector, 'shape') else 'no shape'}")
+        #print(f"DEBUG - OneHotAction - Vector values: {action_vector}")
         index = np.argmax(action_vector).astype(int)
-        print(f"DEBUG - OneHotAction - Selected index: {index}")
+        #print(f"DEBUG - OneHotAction - Selected index: {index}")
         reference = np.zeros_like(action_vector)
         reference[index] = 1
         if not np.allclose(reference, action_vector):
@@ -838,15 +839,17 @@ class ObjectDetectionWrapper:
         """Process observation to add object detection mask."""
         import numpy as np
         
+  
         # Skip printing during channel detection
-        if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-            print("\nPROCESSING OBSERVATION:")
+        #if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+            #print("\nPROCESSING OBSERVATION:")
             
         if isinstance(obs, dict) and 'image' in obs:
             if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                print(f"  Original image shape: {obs['image'].shape}")
-                print(f"  Image dtype: {obs['image'].dtype}")
-                print(f"  Image min/max values: {np.min(obs['image'])}/{np.max(obs['image'])}")
+                #print(f"  Original image shape: {obs['image'].shape}")
+                #print(f"  Image dtype: {obs['image'].dtype}")
+                #print(f"  Image min/max values: {np.min(obs['image'])}/{np.max(obs['image'])}")
+                pass
             
             # Get the original image
             original_image = obs['image']
@@ -858,14 +861,14 @@ class ObjectDetectionWrapper:
             detection_time = time.time() - start_time
             
             if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                print(f"  Detection took {detection_time*1000:.1f}ms")
-                print(f"  Mask shape: {mask.shape if mask is not None else 'None'}")
+                #print(f"  Detection took {detection_time*1000:.1f}ms")
+                #print(f"  Mask shape: {mask.shape if mask is not None else 'None'}")
                 
                 # Debug mask statistics
                 if mask is not None:
                     mask_unique = np.unique(mask)
-                    print(f"  Mask unique values: {mask_unique}")
-                    print(f"  Mask dtype: {mask.dtype}")
+                    #print(f"  Mask unique values: {mask_unique}")
+                    #print(f"  Mask dtype: {mask.dtype}")
             
             # Resize both the original image and the mask
             small_original = self._resize(original_image, self.process_size)
@@ -881,8 +884,8 @@ class ObjectDetectionWrapper:
             # Concatenate the resized original image and mask (both now have 3 dimensions)
             combined = np.concatenate([small_original, small_mask], axis=-1)
             
-            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                print(f"  Final combined shape: {combined.shape}")
+            #if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+                #print(f"  Final combined shape: {combined.shape}")
                 
             obs['image'] = combined
         elif not hasattr(self, '_suppress_prints') or not self._suppress_prints:

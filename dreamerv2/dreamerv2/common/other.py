@@ -196,11 +196,11 @@ class CarryOverState:
         self._fn = fn
         self._state = None
         self._name = fn.__name__ if hasattr(fn, '__name__') else 'unknown'
-        print(f"DEBUG - CarryOverState initialized for function: {self._name}")
+        #print(f"DEBUG - CarryOverState initialized for function: {self._name}")
 
     def __call__(self, *args):
-        print(f"DEBUG - CarryOverState({self._name}) called with arg types: {[type(a).__name__ for a in args]}")
-        print(f"DEBUG - CarryOverState({self._name}) current state type: {type(self._state).__name__ if self._state is not None else 'None'}")
+        #print(f"DEBUG - CarryOverState({self._name}) called with arg types: {[type(a).__name__ for a in args]}")
+        #print(f"DEBUG - CarryOverState({self._name}) current state type: {type(self._state).__name__ if self._state is not None else 'None'}")
         
         # Call the function with the stored state
         try:
@@ -214,16 +214,18 @@ class CarryOverState:
         # Properly unpack and store the result
         if isinstance(result, tuple) and len(result) == 2:
             out, new_state = result
-            print(f"DEBUG - CarryOverState({self._name}) unpacked result: out={type(out).__name__}, state={type(new_state).__name__}")
+            #print(f"DEBUG - CarryOverState({self._name}) unpacked result: out={type(out).__name__}, state={type(new_state).__name__}")
             
             # Only update state if we got a valid new state
             if new_state is not None:
                 self._state = new_state
-                print(f"DEBUG - CarryOverState({self._name}) new state structure check:")
+                #print(f"DEBUG - CarryOverState({self._name}) new state structure check:")
                 if isinstance(new_state, dict):
-                    print(f"DEBUG - New state is dict with keys: {list(new_state.keys())}")
+                  pass
+                    #print(f"DEBUG - New state is dict with keys: {list(new_state.keys())}")
                 elif isinstance(new_state, tuple) and len(new_state) > 0:
-                    print(f"DEBUG - New state is tuple with {len(new_state)} elements")
+                  pass
+                    #print(f"DEBUG - New state is tuple with {len(new_state)} elements")
             
             return out, self._state
         else:

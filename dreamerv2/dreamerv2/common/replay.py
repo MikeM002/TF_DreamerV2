@@ -42,7 +42,8 @@ class Replay:
   def add_step(self, transition, worker=0):
     # Debug print for image shape
     if 'image' in transition:
-      print("DEBUG - Replay Buffer - Adding image shape:", transition['image'].shape)
+      pass
+      #print("DEBUG - Replay Buffer - Adding image shape:", transition['image'].shape)
     episode = self._ongoing_eps[worker]
     for key, value in transition.items():
       episode[key].append(value)
@@ -114,7 +115,8 @@ class Replay:
         k: convert(v[index: index + length])
         for k, v in episode.items() if not k.startswith('log_')}
     if 'image' in sequence:
-      print("DEBUG - Replay Buffer - Sampled sequence image shape:", sequence['image'].shape)
+      pass
+      #print("DEBUG - Replay Buffer - Sampled sequence image shape:", sequence['image'].shape)
     sequence['is_first'] = np.zeros(len(sequence['action']), np.bool)
     sequence['is_first'][0] = True
     if self._maxlen:
