@@ -7,15 +7,15 @@ defaults:
   task: dmc_walker_walk
   envs: 1
   envs_parallel: none
-  render_size: [128, 128]
+  render_size: [64, 64]
   process_size: [64, 64]  # New parameter for post-detection resize
   use_obj_detection: False
   obj_detection_threshold: 0.7
   dmc_camera: -1
   atari_grayscale: True
-  time_limit: 0
+  time_limit: 3000
   action_repeat: 2
-  steps: 1000
+  steps: 50000
   log_every: 1e3
   eval_every: 1e3
   eval_eps: 1
@@ -89,11 +89,11 @@ atari:
   task: atari_ms_pacman
   encoder: {mlp_keys: '$^', cnn_keys: 'image'}
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
-  time_limit: 2000
+  time_limit: 3000
   action_repeat: 4
-  steps: 1000
-  eval_every: 300
-  log_every: 300
+  steps: 50000
+  eval_every: 1000
+  log_every: 1000
   prefill: 1000
   train_every: 16
   clip_rewards: tanh
