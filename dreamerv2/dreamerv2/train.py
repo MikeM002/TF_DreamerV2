@@ -291,7 +291,8 @@ def main():
               env, 
               detection_threshold=config.get('obj_detection_threshold', 0.7),
               process_size=config.get('process_size', (64, 64)),
-              template_path=template_path
+              template_path=template_path,
+              logdir=logdir  # Pass the current logdir from the main function
           )
           
       env = common.OneHotAction(env)

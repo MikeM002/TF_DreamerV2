@@ -663,18 +663,37 @@ class Async:
 
 class ObjectDetectionWrapper:
     """Environment wrapper that adds object detection to observations."""
-
-    def __init__(self, env, template_path=None, detection_threshold=0.7, process_size=None):
+    def __init__(self, env, template_path=None, detection_threshold=0.7, process_size=None, logdir=None):
         self._env = env
         self.detection_size = (128, 128)  # Default size for detection
         self.process_size = process_size if process_size else (64, 64)
         
-        print("="*50)
+        # --- Frame saving configuration ---
+        if logdir:
+            # Use specified logdir path
+            self.frames_dir = os.path.join(logdir, "framesdetected")
+        else:
+            # Default fallback (current behavior)
+            self.frames_dir = "frames_detected"
+            
+        self.original_dir = os.path.join(self.frames_dir, "original")
+        self.objeto_dir = os.path.join(self.frames_dir, "objeto")
+        os.makedirs(self.original_dir, exist_ok=True)
+        os.makedirs(self.objeto_dir, exist_ok=True)
+        self.frame_save_count = 0
+        self.frame_save_limit = 50        # Maximum number of frames to save
+        self.frame_save_frequency = 10    # Save every Nth frame
+        self.frame_counter = 0            # Count all frames processed
+        print(f"Frame saving configured: limit={self.frame_save_limit}, frequency=every {self.frame_save_frequency} frames")
+        print(f"Saving frames to: {self.frames_dir}")
+
+        print("=" * 50)
         print(f"OBJECT DETECTION DEBUG INFO:")
         print(f"  Detection threshold: {detection_threshold}")
         print(f"  Detection size: {self.detection_size}")
         print(f"  Process size: {self.process_size}")
         print(f"  Template path: {template_path}")
+
         
         # Create detector
         self.detector = obj_detector.create_detector(
@@ -700,7 +719,7 @@ class ObjectDetectionWrapper:
         # Pre-determine the output channel count (do this only once)
         self._output_channels = self._determine_output_channels()
         print(f"  Preprocessed output will have {self._output_channels} channels")
-        print("="*50)
+        print("=" * 50)
         
         # Handle both gym-style and DreamerV2-style environments
         if hasattr(self._env, 'act_space'):
@@ -721,68 +740,48 @@ class ObjectDetectionWrapper:
             self.reward_range = self._env.reward_range
         if hasattr(self._env, 'metadata'):
             self.metadata = self._env.metadata
-    
-    
+        
+
     def __getattr__(self, name):
-        """Forward unknown attributes to the wrapped environment."""
         if name.startswith('_'):
             raise AttributeError(f"attempted to get missing private attribute '{name}'")
         return getattr(self._env, name)
         
     @property
     def act_space(self):
-        """Property to match DreamerV2's environment interface."""
         return self._act_space
         
     @property
     def obs_space(self):
-        """Property to match DreamerV2's environment interface."""
         return self._obs_space
 
-            
     def _determine_output_channels(self):
-        """Determine the number of output channels without full processing."""
-        # Create a minimal test image (1x1 pixel is enough to determine channels)
         test_image = np.zeros((1, 1, 1), dtype=np.uint8)
         test_obs = {'image': test_image}
-        
-        # Set a flag to suppress prints during this test processing
         self._suppress_prints = True
         processed = self._process_obs(test_obs)
         self._suppress_prints = False
-        
-        # Return the number of channels in the processed output
         return processed['image'].shape[-1]
 
     def _update_obs_space(self):
-        """Update DreamerV2-style observation space using pre-determined channel count."""
         spaces = dict(self._env.obs_space)
-        
         print(f"\n==== UPDATING OBS SPACE ====")
         if 'image' in spaces:
             input_shape = spaces['image'].shape
             print(f"Input observation shape: {input_shape}")
-            
-            if len(input_shape) > 1:  # Make sure it's an image
-                # Use the pre-computed channel count determined during initialization
+            if len(input_shape) > 1:
                 shape = self.process_size + (self._output_channels,)
                 print(f"Using pre-determined channel count: {self._output_channels}")
-                
                 spaces['image'] = gym.spaces.Box(0, 255, shape, dtype=np.uint8)
                 print(f"Updated observation space shape: {spaces['image'].shape}")
-        
         print("==== OBS SPACE UPDATE COMPLETE ====\n")
         return spaces
 
     def _update_observation_space(self):
-        """Update gym-style observation space to match actual output format."""
         import gym
         from gym.spaces import Box
-        
         print(f"\n==== UPDATING GYM OBSERVATION SPACE ====")
         obs_space = self._env.observation_space
-        
-        # Get input space information
         if isinstance(obs_space, gym.spaces.Dict) and 'image' in obs_space.spaces:
             input_space = obs_space.spaces['image']
             input_shape = input_space.shape
@@ -793,104 +792,72 @@ class ObjectDetectionWrapper:
         else:
             print(f"Input observation space: {obs_space} (no image found)")
             return obs_space
-            
-        # Use the same dynamically determined channel count
         print(f"Using pre-determined output channel count: {self._output_channels}")
         output_shape = self.process_size + (self._output_channels,)
-        
-        # Create appropriate space type
         if isinstance(obs_space, gym.spaces.Dict):
             spaces = {k: v for k, v in obs_space.spaces.items()}
             spaces['image'] = Box(0, 255, output_shape, dtype=np.uint8)
             result = gym.spaces.Dict(spaces)
             print(f"Updated 'image' in Dict to shape {output_shape}")
         else:
-            # Direct Box space
             result = Box(0, 255, output_shape, dtype=np.uint8)
             print(f"Updated Box space to shape {output_shape}")
-        
         print("==== GYM OBSERVATION SPACE UPDATE COMPLETE ====\n")
         return result
 
     def _resize(self, image, size):
-        """Resize an image to the given size."""
         from PIL import Image
-        
-        # Handle None images by returning a blank image
         if image is None:
             return np.zeros((*size, 1), dtype=np.uint8)
-        
-        # Handle single-channel images
         if len(image.shape) == 3 and image.shape[2] == 1:
-            image = image.squeeze(axis=2)  # Remove the channel dimension for PIL compatibility
-        
-        # Convert to PIL and resize
+            image = image.squeeze(axis=2)
         image_pil = Image.fromarray(image)
         image_pil = image_pil.resize(size, Image.NEAREST)
         resized = np.array(image_pil)
-        
-        # Restore the channel dimension if it was removed
         if len(image.shape) == 3 and image.shape[2] == 1 and len(resized.shape) == 2:
             resized = resized[..., np.newaxis]
-        
         return resized
 
     def _process_obs(self, obs):
-        """Process observation to add object detection mask."""
         import numpy as np
-        
-  
-        # Skip printing during channel detection
-        #if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-            #print("\nPROCESSING OBSERVATION:")
-            
         if isinstance(obs, dict) and 'image' in obs:
             if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                #print(f"  Original image shape: {obs['image'].shape}")
-                #print(f"  Image dtype: {obs['image'].dtype}")
-                #print(f"  Image min/max values: {np.min(obs['image'])}/{np.max(obs['image'])}")
                 pass
-            
-            # Get the original image
             original_image = obs['image']
-            
-            # Process the image with object detection
             import time
             start_time = time.time()
             result, confidence, mask, positions = self.detector.process_and_resize(original_image)
             detection_time = time.time() - start_time
-            
             if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                #print(f"  Detection took {detection_time*1000:.1f}ms")
-                #print(f"  Mask shape: {mask.shape if mask is not None else 'None'}")
-                
-                # Debug mask statistics
-                if mask is not None:
-                    mask_unique = np.unique(mask)
-                    #print(f"  Mask unique values: {mask_unique}")
-                    #print(f"  Mask dtype: {mask.dtype}")
-            
-            # Resize both the original image and the mask
+                pass
             small_original = self._resize(original_image, self.process_size)
             small_mask = self._resize(mask, self.process_size) if mask is not None else np.zeros((*self.process_size, 1), dtype=np.uint8)
-            
-            # Ensure both arrays have 3 dimensions before concatenation
             if len(small_original.shape) == 2:
-                small_original = small_original[..., None]  # Add channel dimension
-                
+                small_original = small_original[..., None]
             if len(small_mask.shape) == 2:
-                small_mask = small_mask[..., None]  # Add channel dimension
-                
-            # Concatenate the resized original image and mask (both now have 3 dimensions)
+                small_mask = small_mask[..., None]
             combined = np.concatenate([small_original, small_mask], axis=-1)
-            
-            #if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                #print(f"  Final combined shape: {combined.shape}")
-                
             obs['image'] = combined
+
+            # --- NUEVA SECCIÓN: Guardar frames con timestamp ---
+            # Se usa time.time() para obtener un identificador único (milisegundos)
+            if self.frame_save_limit is None or (hasattr(self, 'frame_save_count') and self.frame_save_count < self.frame_save_limit):
+                import cv2
+                timestamp = int(time.time() * 1000)
+                filename_original = os.path.join(self.original_dir, f"frame_{timestamp}.png")
+                filename_objeto = os.path.join(self.objeto_dir, f"frame_{timestamp}.png")
+                # Si la imagen combinada tiene 2 canales, la convertimos a 3 canales
+                save_combined = combined
+                if save_combined.ndim == 3 and save_combined.shape[-1] == 2:
+                    zeros_channel = np.zeros((*save_combined.shape[:2], 1), dtype=save_combined.dtype)
+                    save_combined = np.concatenate([save_combined, zeros_channel], axis=-1)
+                cv2.imwrite(filename_original, original_image)
+                cv2.imwrite(filename_objeto, save_combined)
+                self.frame_save_count = getattr(self, 'frame_save_count', 0) + 1
+                print(f"Frame saved: {self.frame_save_count} (timestamp: {timestamp})")
+            # --- FIN NUEVA SECCIÓN ---
         elif not hasattr(self, '_suppress_prints') or not self._suppress_prints:
             print("  Observation is not a dictionary with 'image' key")
-            
         return obs
 
     def reset(self):
@@ -898,81 +865,67 @@ class ObjectDetectionWrapper:
         return self._process_obs(obs)
 
     def step(self, action):
-        # Handle both dictionary actions and direct actions
         if isinstance(action, dict) and hasattr(self._env, 'act_space'):
             obs = self._env.step(action)
-            # DreamerV2-style environments return just the observation dictionary
             return self._process_obs(obs)
         else:
-            # Gym-style environments return observation, reward, done, info
             obs, reward, done, info = self._env.step(action)
             return self._process_obs(obs), reward, done, info
 
-
 def make(name, **kwargs):
-  # Extract object detection parameters first
-  use_obj_detection = kwargs.pop('use_obj_detection', False)
-  obj_detection_template = kwargs.pop('obj_detection_template', None)
-  obj_detection_threshold = kwargs.pop('obj_detection_threshold', 0.7)
+    use_obj_detection = kwargs.pop('use_obj_detection', False)
+    obj_detection_template = kwargs.pop('obj_detection_template', None)
+    obj_detection_threshold = kwargs.pop('obj_detection_threshold', 0.7)
+    logdir = kwargs.pop('logdir', None)  # Extract logdir from kwargs
   
-  # Handle render_size and process_size parameters
-  render_size = kwargs.pop('render_size', (64, 64))
-  process_size = kwargs.pop('process_size', (64, 64))
+    render_size = kwargs.pop('render_size', (64, 64))
+    process_size = kwargs.pop('process_size', (64, 64))
   
-  # Create the environment based on the suite
-  suite, task = name.split('_', 1)
-  if suite == 'dmc':
-    env = DMC(task, **kwargs)
-  elif suite == 'atari':
-    env = Atari(task, action_repeat=kwargs.get('action_repeat', 4),
-                size=render_size,
-                grayscale=kwargs.get('atari_grayscale', True))
-  elif suite == 'crafter':
-    outdir = kwargs.get('outdir', None)
-    reward = kwargs.get('reward', True)
-    seed = kwargs.get('seed', None)
-    env = Crafter(outdir, reward, seed)
-  else:
-    raise NotImplementedError(f"Unknown environment suite: {suite}")
+    suite, task = name.split('_', 1)
+    if suite == 'dmc':
+        env = DMC(task, **kwargs)
+    elif suite == 'atari':
+        env = Atari(task, action_repeat=kwargs.get('action_repeat', 4),
+                    size=render_size,
+                    grayscale=kwargs.get('atari_grayscale', True))
+    elif suite == 'crafter':
+        outdir = kwargs.get('outdir', None)
+        reward = kwargs.get('reward', True)
+        seed = kwargs.get('seed', None)
+        env = Crafter(outdir, reward, seed)
+    else:
+        raise NotImplementedError(f"Unknown environment suite: {suite}")
   
-  # Apply object detection wrapper if needed
-  if use_obj_detection or ('pacman' in name.lower()):
-    env = ObjectDetectionWrapper(
-      env, 
-      template_path=obj_detection_template,
-      detection_threshold=obj_detection_threshold,
-      process_size=process_size
-    )
+    if use_obj_detection or ('pacman' in name.lower()):
+        env = ObjectDetectionWrapper(
+            env, 
+            template_path=obj_detection_template,
+            detection_threshold=obj_detection_threshold,
+            process_size=process_size,
+            logdir=logdir  # Pass the logdir to the wrapper
+        )
   
-  return env
-
+    return env
 
 def inspect_image_channels(image, label=""):
     """Utility function to inspect image channels and their characteristics."""
     print(f"\n==== IMAGE CHANNEL INSPECTION: {label} ====")
     print(f"Shape: {image.shape}")
-    
     if len(image.shape) < 3:
         print("Not a multi-channel image")
         return
-    
     num_channels = image.shape[-1]
     print(f"Number of channels: {num_channels}")
-    
-    # For each channel, analyze its characteristics
     for i, channel in enumerate(image.transpose(2, 0, 1)):
         min_val = np.min(channel)
         max_val = np.max(channel)
         unique_vals = np.unique(channel)
         mean_val = np.mean(channel)
         std_val = np.std(channel)
-        
         print(f"Channel {i}:")
         print(f"  Range: {min_val:.2f} to {max_val:.2f}")
         print(f"  Mean: {mean_val:.2f}, Std: {std_val:.2f}")
         print(f"  Unique values: {len(unique_vals)}")
-        
-        # Try to identify the type of channel
         if len(unique_vals) <= 2:
             print("  Likely a binary mask")
         elif std_val < 0.1 * (max_val - min_val):
