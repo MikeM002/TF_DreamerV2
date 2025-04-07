@@ -10,7 +10,7 @@ defaults:
   render_size: [128, 128]
   process_size: [64, 64]  # New parameter for post-detection resize
   use_obj_detection: True
-  obj_detection_threshold: 0.7
+  obj_detection_threshold: 0.87
   dmc_camera: -1
   atari_grayscale: True
   time_limit: 3000
@@ -91,7 +91,7 @@ atari:
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 3000
   action_repeat: 4
-  steps: 500000
+  steps: 5000
   eval_every: 1000
   log_every: 1000
   prefill: 1000

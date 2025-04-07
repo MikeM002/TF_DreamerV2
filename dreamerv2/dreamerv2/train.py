@@ -2,6 +2,7 @@ import collections #estructuras de datos especializadas (listas, diccionarios, t
 import functools #manejo de funciones
 import logging #mensajes de estado, errores, advertencias, etc
 import os
+import glob
 import pathlib
 import re
 import sys #Variables mantenidas por el interprete
@@ -229,69 +230,43 @@ def main():
       # Apply object detection if enabled
       if config.get('use_obj_detection', False):
           print(f"Applying object detection wrapper to {task}")
-          template_path = os.path.join(os.path.dirname(__file__), 'templates', 'pacman.png')
+          template_dir = os.path.join(os.path.dirname(__file__), 'templates')
           
-          print("=" * 50)
-          print("DEBUG: TEMPLATE LOADING DETAILS")
-          print(f"Absolute template path: {os.path.abspath(template_path)}")
-          print(f"Current working directory: {os.getcwd()}")
-          print(f"Current file location: {__file__}")
-          print(f"Path exists: {os.path.exists(template_path)}")
+          # Check for 12 templates
+          if not os.path.exists(template_dir):
+              os.makedirs(template_dir, exist_ok=True)
+              print(f"Created templates directory: {template_dir}")
           
-          template_dir = os.path.dirname(template_path)
-          print(f"Template directory exists: {os.path.exists(template_dir)}")
+          template_files = glob.glob(os.path.join(template_dir, "*.png"))
+          print(f"Found {len(template_files)} template files in {template_dir}")
           
-          if os.path.exists(os.path.dirname(__file__)):
-              print(f"Files in {os.path.dirname(__file__)}:")
-              for f in os.listdir(os.path.dirname(__file__)):
-                  print(f"  {f}")
-                  
-              templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
-              if os.path.exists(templates_dir):
-                  print(f"Files in templates directory:")
-                  for f in os.listdir(templates_dir):
-                      print(f"  {f}")
-              else:
-                  print("Templates directory doesn't exist. Creating it...")
-                  os.makedirs(templates_dir, exist_ok=True)
-                  print(f"Templates directory created: {os.path.exists(templates_dir)}")
-                  
+          if len(template_files) < 12:
+              print(f"WARNING: Expected 12 templates but found only {len(template_files)}!")
+              
+              # For backward compatibility, ensure we have at least the main template
+              main_template_path = os.path.join(template_dir, 'pacman.png')
+              if not os.path.exists(main_template_path):
                   try:
                       import cv2
                       import numpy as np
                       template = np.zeros((32, 32, 3), dtype=np.uint8)
                       cv2.circle(template, (16, 16), 14, (0, 255, 255), -1)
-                      cv2.imwrite(template_path, template)
-                      print(f"Created template at {template_path}")
-                      print(f"Template now exists: {os.path.exists(template_path)}")
-                      print(f"Template size: {os.path.getsize(template_path)} bytes")
+                      cv2.imwrite(main_template_path, template)
+                      print(f"Created template at {main_template_path}")
                   except Exception as e:
                       print(f"Error creating template: {str(e)}")
+          else:
+              print("Successfully found all 12 templates!")
           
           print("=" * 50)
-          
-          try:
-              import cv2
-              template = cv2.imread(template_path, 0)
-              if template is None:
-                  print(f"ERROR: OpenCV couldn't load the template at {template_path}")
-                  template = cv2.imread(template_path, 1)
-                  if template is None:
-                      print("ERROR: OpenCV couldn't load template in color mode either")
-                      print(f"File readable: {os.access(template_path, os.R_OK)}")
-                      print(f"File writable: {os.access(template_path, os.W_OK)}")
-                  else:
-                      print(f"Successfully loaded template in color mode: {template.shape}")
-              else:
-                  print(f"Successfully loaded template in grayscale: {template.shape}")
-          except Exception as e:
-              print(f"Exception when loading template with OpenCV: {str(e)}")
+          print("DEBUG: TEMPLATE LOADING DETAILS")
+          print(f"Absolute template path: {os.path.abspath(template_dir)}")
           
           env = common.envs.ObjectDetectionWrapper(
               env, 
               detection_threshold=config.get('obj_detection_threshold', 0.7),
               process_size=config.get('process_size', (64, 64)),
-              template_path=template_path
+              template_path=template_dir  # Pass the template directory instead of a single file
           )
           
       env = common.OneHotAction(env)

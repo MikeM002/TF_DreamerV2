@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import glob
 import logging
 from pathlib import Path
 import tensorflow as tf
@@ -17,12 +18,13 @@ class PacmanDetector:
         Initialize the PacMan detector.
         
         Args:
-            template_path: Path to the PacMan template image
+            template_path: Path to a single template image or directory with multiple templates
             threshold: Threshold for template matching (0.0-1.0)
             detection_size: Size of frames used for detection (height, width)
             process_size: Size of frames after resizing for model processing (height, width)
         """
-        self.template = None
+        self.templates = []  # Will store multiple templates
+        self.template_names = []  # Store template names for debugging
         self.threshold = threshold
         self.detection_size = detection_size
         self.process_size = process_size
@@ -34,53 +36,179 @@ class PacmanDetector:
             template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'pacman.png')
             self.logger.info(f"Using default template path: {template_path}")
         
-        self.load_template(template_path)
+        self.load_templates(template_path)
     
-    def load_template(self, template_path):
-        """Load PacMan template from the given path."""
-        print(f"PacmanDetector: Attempting to load template from {template_path}")
+    def load_templates(self, template_path):
+        """Load one or more templates for pacman detection."""
+        print(f"PacmanDetector: Loading templates from {template_path}")
         
         if not template_path:
             print(f"PacmanDetector: Template path is empty")
             return False
+        
+        # Check if path is a directory
+        if os.path.isdir(template_path):
+            print(f"PacmanDetector: Loading templates from directory: {template_path}")
+            template_files = glob.glob(os.path.join(template_path, "*.png"))
             
-        if not os.path.exists(template_path):
-            print(f"PacmanDetector: Template file doesn't exist at {template_path}")
-            print(f"PacmanDetector: Current working directory: {os.getcwd()}")
-            print(f"PacmanDetector: Absolute template path: {os.path.abspath(template_path)}")
+            if not template_files:
+                print(f"PacmanDetector: No template files found in directory")
+                return False
+                
+            print(f"PacmanDetector: Found {len(template_files)} template files")
+            
+            # Load each template
+            for file_path in template_files:
+                success = self._load_single_template(file_path)
+                if success:
+                    print(f"PacmanDetector: Successfully loaded template: {os.path.basename(file_path)}")
+                else:
+                    print(f"PacmanDetector: Failed to load template: {os.path.basename(file_path)}")
+            
+            return len(self.templates) > 0
+        else:
+            # Single file path
+            return self._load_single_template(template_path)
+    
+    def _load_single_template(self, file_path):
+        """Helper method to load a single template file."""
+        if not os.path.exists(file_path):
+            print(f"PacmanDetector: Template file doesn't exist at {file_path}")
             return False
         
-        print(f"PacmanDetector: Template file exists with size: {os.path.getsize(template_path)} bytes")
-        print(f"PacmanDetector: File readable: {os.access(template_path, os.R_OK)}")
-            
-        self.template = cv2.imread(template_path, 0)
-        if self.template is None:
-            print(f"PacmanDetector: Failed to load template with cv2.imread")
-            color_template = cv2.imread(template_path, 1)
+        template = cv2.imread(file_path, 0)  # Load in grayscale
+        if template is None:
+            print(f"PacmanDetector: Failed to load template with cv2.imread: {file_path}")
+            color_template = cv2.imread(file_path, 1)  # Try loading in color
             if color_template is None:
                 print(f"PacmanDetector: Failed to load in color mode too")
-                try:
-                    with open(template_path, 'rb') as f:
-                        content = f.read(20)
-                    print(f"PacmanDetector: File header bytes: {content}")
-                except Exception as e:
-                    print(f"PacmanDetector: Error reading file: {str(e)}")
+                return False
             else:
                 print(f"PacmanDetector: Loaded in color mode: {color_template.shape}")
-                self.template = cv2.cvtColor(color_template, cv2.COLOR_BGR2GRAY)
-                print(f"PacmanDetector: Converted to grayscale: {self.template.shape}")
-        else:
-            print(f"PacmanDetector: Template loaded successfully: shape={self.template.shape}, dtype={self.template.dtype}")
-            
-        self.logger.info(f"Loaded PacMan template from {template_path}")
-        return self.template is not None
+                template = cv2.cvtColor(color_template, cv2.COLOR_BGR2GRAY)
+        
+        print(f"PacmanDetector: Template loaded: shape={template.shape}, dtype={template.dtype}")
+        self.templates.append(template)
+        self.template_names.append(os.path.basename(file_path))
+        return True
     
     @property
-    def templates(self):
-        """Return a list of templates for compatibility with the wrapper."""
-        if self.template is not None:
-            return [self.template]
-        return []
+    def template(self):
+        """Return the first template for backward compatibility."""
+        return self.templates[0] if self.templates else None
+    
+    def try_templates(self, frame):
+        """
+        Try detection with each template, stopping at the first match.
+        
+        Args:
+            frame: A numpy array containing the game frame
+            
+        Returns:
+            tuple: Same as process_and_resize but using the first successful template
+        """
+        if not self.templates:
+            print("PacmanDetector: No templates available for detection")
+            # Return empty results
+            binary_mask = np.zeros_like(frame, dtype=np.uint8)
+            if len(frame.shape) > 2:
+                binary_mask = binary_mask[:,:,0]  # Ensure mask is 2D
+            
+            # Create empty combined output
+            model_frame = cv2.resize(frame, (self.process_size[1], self.process_size[0]))
+            resized_mask = np.zeros(self.process_size, dtype=np.uint8)
+            
+            if model_frame.dtype == np.uint8:
+                normalized_frame = model_frame.astype(np.float32) / 255.0
+            else:
+                normalized_frame = model_frame.astype(np.float32)
+                
+            if len(normalized_frame.shape) == 3:
+                frame_gray = cv2.cvtColor(normalized_frame, cv2.COLOR_RGB2GRAY)
+            else:
+                frame_gray = normalized_frame
+                
+            combined_output = np.stack([frame_gray, np.zeros_like(frame_gray)], axis=-1)
+            return frame, model_frame, binary_mask, combined_output
+        
+        # Ensure the frame is at detection size
+        frame_h, frame_w = frame.shape[:2] if len(frame.shape) > 2 else frame.shape
+        if (frame_h, frame_w) != self.detection_size:
+            frame = cv2.resize(frame, (self.detection_size[1], self.detection_size[0]))
+        
+        # Convert frame to grayscale if needed
+        if len(frame.shape) > 2 and frame.shape[2] >= 3:
+            gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        else:
+            gray_frame = frame.copy()
+        
+        # Create empty binary mask
+        binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
+        best_confidence = 0
+        detection_found = False
+        
+        # Try each template until a match is found
+        templates_checked = 0
+        for i, template in enumerate(self.templates):
+            templates_checked += 1
+            
+            # Perform template matching
+            res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
+            _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
+            
+            if max_confidence >= self.threshold and max_confidence > best_confidence:
+                detection_found = True
+                best_confidence = max_confidence
+                
+                # Update the mask with this detection
+                w, h = template.shape[1], template.shape[0]
+                x, y = max_loc
+                binary_mask[y:y+h, x:x+w] = 1
+                
+                print(f"PacmanDetector: Match found with template {i} ({self.template_names[i]}) at confidence {max_confidence:.3f}")
+                
+                # Stop searching once we find a match
+                break
+        
+        print(f"PacmanDetector: Checked {templates_checked}/{len(self.templates)} templates, detection found: {detection_found}")
+        
+        # NEW: Crop the mask below line 103 to avoid false detections in score bar
+        if binary_mask.shape[0] > 103:
+            binary_mask[103:, :] = 0
+        
+        # Resize for model processing
+        model_frame = cv2.resize(
+            frame, 
+            (self.process_size[1], self.process_size[0]), 
+            interpolation=cv2.INTER_LINEAR
+        )
+        
+        # Also resize the binary mask
+        resized_mask = cv2.resize(
+            binary_mask,
+            (self.process_size[1], self.process_size[0]),
+            interpolation=cv2.INTER_NEAREST
+        )
+        
+        # Create combined output (frame + mask)
+        if model_frame.dtype == np.uint8:
+            normalized_frame = model_frame.astype(np.float32) / 255.0
+        else:
+            normalized_frame = model_frame.astype(np.float32)
+        
+        mask_float = resized_mask.astype(np.float32)
+        
+        # Create combined output with shape (H, W, 2)
+        if len(normalized_frame.shape) == 3:
+            if normalized_frame.shape[2] >= 3:
+                frame_gray = cv2.cvtColor(normalized_frame, cv2.COLOR_RGB2GRAY)
+            else:
+                frame_gray = normalized_frame[:,:,0]
+            combined_output = np.stack([frame_gray, mask_float], axis=-1)
+        else:
+            combined_output = np.stack([normalized_frame, mask_float], axis=-1)
+            
+        return frame, model_frame, resized_mask, combined_output
     
     def process_frame(self, frame):
         """
@@ -91,15 +219,15 @@ class PacmanDetector:
             
         Returns:
             tuple: (original_frame, binary_mask)
-                original_frame: The input frame unchanged
-                binary_mask: A binary frame with 1s where PacMan is detected, 0s elsewhere
         """
-        if self.template is None:
-            self.logger.warning("No template loaded, cannot detect PacMan")
+        if not self.templates:
+            self.logger.warning("No templates loaded, cannot detect PacMan")
             # Return original frame and empty mask
             mask = np.zeros_like(frame, dtype=np.uint8)
+            if len(mask.shape) > 2 and mask.shape[2] >= 3:
+                mask = mask[:,:,0]  # Use just one channel for the mask
             return frame, mask
-        
+            
         # Create a copy of the frame to avoid modifying the original
         frame_copy = frame.copy()
         
@@ -111,36 +239,45 @@ class PacmanDetector:
             
         # Create empty binary mask the same size as the frame
         binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
+        best_confidence = 0
         
-        # Perform template matching
-        res = cv2.matchTemplate(gray_frame, self.template, cv2.TM_CCOEFF_NORMED)
-        loc = np.where(res >= self.threshold)
-        
-        # Create binary mask with detected regions
-        for pt in zip(*loc[::-1]):  # x, y coordinates
-            w, h = self.template.shape[1], self.template.shape[0]
-            x1, y1 = pt[0], pt[1]
-            x2, y2 = x1 + w, y1 + h
+        # Try each template and use the best match
+        for template in self.templates:
+            # Perform template matching
+            res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
+            _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
             
-            # Set the detected region to 1 in the binary mask
-            binary_mask[y1:y2, x1:x2] = 1
-        
+            if max_confidence >= self.threshold and max_confidence > best_confidence:
+                best_confidence = max_confidence
+                
+                # Clear the previous mask
+                binary_mask.fill(0)
+                
+                # Create mask with this detection
+                w, h = template.shape[1], template.shape[0]
+                x, y = max_loc
+                binary_mask[y:y+h, x:x+w] = 1
+                
+                # Stop at the first successful match
+                break
+                
+        # NEW: Crop the mask below line 103 to avoid false detections in score bar
+        if binary_mask.shape[0] > 103:
+            binary_mask[103:, :] = 0
+            
         return frame, binary_mask
     
     def process_and_resize(self, frame):
         """
         Process a frame for detection at detection_size and then resize to process_size.
-        
-        Args:
-            frame: A numpy array containing the game frame
-            
-        Returns:
-            tuple: (detection_frame, model_frame, resized_mask, combined_output)
-                detection_frame: Frame at detection_size 
-                model_frame: Frame resized to process_size for model input
-                resized_mask: A binary mask with PacMan detection resized to process_size
-                combined_output: A combined frame+mask tensor with shape (H, W, 2) for model input
+        Uses all templates and returns the first successful match.
         """
+        # For multiple templates, use the try_templates method which implements
+        # the logic of trying each template and stopping at the first match
+        if len(self.templates) > 1:
+            return self.try_templates(frame)
+        
+        # Otherwise use the original single template logic
         # Ensure the frame is at detection size
         frame_h, frame_w = frame.shape[:2] if len(frame.shape) > 2 else frame.shape
         if (frame_h, frame_w) != self.detection_size:
@@ -166,7 +303,6 @@ class PacmanDetector:
         )
         
         # Create combined output (frame + mask) with shape (H, W, 2)
-        # First normalize the model frame to 0-1 range if it's not already
         if model_frame.dtype == np.uint8:
             normalized_frame = model_frame.astype(np.float32) / 255.0
         else:
