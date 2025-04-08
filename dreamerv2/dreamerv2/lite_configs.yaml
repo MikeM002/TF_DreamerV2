@@ -15,7 +15,7 @@ defaults:
   atari_grayscale: True
   time_limit: 3000
   action_repeat: 2
-  steps: 50000
+  steps: 200000
   log_every: 1e3
   eval_every: 1e3
   eval_eps: 1
@@ -91,7 +91,7 @@ atari:
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 3000
   action_repeat: 4
-  steps: 50000
+  steps: 200000
   eval_every: 1000
   log_every: 1000
   prefill: 1000
