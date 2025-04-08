@@ -38,10 +38,7 @@ class PacmanDetector:
     
     def load_templates(self, template_path):
         """Load one or more templates for pacman detection."""
-        print(f"PacmanDetector: Loading templates from {template_path}")
-        
         if not template_path:
-            print(f"PacmanDetector: Template path is empty")
             return False
         
         # Check if path is a directory
@@ -144,38 +141,6 @@ class PacmanDetector:
                 
                 # Add this detection to the mask without resetting it
                 binary_mask[y:y+h, x:x+w] = 1
-        
-        # DEBUG: Print detection statistics
-        detection_pixels = np.sum(binary_mask)
-        print(f"🔍 Detection stats: {detection_pixels} pixels detected as Pacman")
-        if detection_pixels > 0:
-            # Make sure the binary_mask is 2D for np.where()
-            if len(binary_mask.shape) > 2:
-                # If mask has more than 2 dimensions, use only the first channel
-                flat_mask = binary_mask[:,:,0]
-            else:
-                flat_mask = binary_mask
-                
-            # Find positions where mask is 1 (detections)
-            positions = np.where(flat_mask == 1)
-            y_coords, x_coords = positions[0], positions[1]
-            
-            # Get unique coordinates (top-left corners of detections)
-            unique_coords = []
-            i = 0
-            seen = set()
-            while i < len(y_coords) and len(unique_coords) < 5:
-                # Check for new regions by looking at larger gaps
-                if i == 0 or (abs(y_coords[i] - y_coords[i-1]) > 5 or abs(x_coords[i] - x_coords[i-1]) > 5):
-                    coord = (y_coords[i], x_coords[i])
-                    if coord not in seen:
-                        unique_coords.append(coord)
-                        seen.add(coord)
-                i += 1
-            
-            print("📌 Sample detection positions (potential objects):")
-            for y, x in unique_coords[:5]:  # Show at most 5 positions
-                print(f"  Position: ({x}, {y})")
         
         # Crop the mask below line 103 to avoid false detections in score bar
         if binary_mask.shape[0] > 103:
