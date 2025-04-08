@@ -38,34 +38,24 @@ class PacmanDetector:
     
     def load_templates(self, template_path):
         """Load one or more templates for pacman detection."""
-        #print(f"PacmanDetector: Loading templates from {template_path}")
+        print(f"PacmanDetector: Loading templates from {template_path}")
         
         if not template_path:
-            #print(f"PacmanDetector: Template path is empty")
+            print(f"PacmanDetector: Template path is empty")
             return False
         
         # Check if path is a directory
         if os.path.isdir(template_path):
-            #print(f"PacmanDetector: Loading templates from directory: {template_path}")
             template_files = glob.glob(os.path.join(template_path, "*.png"))
             
             if not template_files:
-                #print(f"PacmanDetector: No template files found in directory")
                 return False
                 
-            #print(f"PacmanDetector: Found {len(template_files)} template files")
-            
-            # Load each template
             for file_path in template_files:
-                success = self._load_single_template(file_path)
-                #if success:
-                    #print(f"PacmanDetector: Successfully loaded template: {os.path.basename(file_path)}")
-                #else:
-                    #print(f"PacmanDetector: Failed to load template: {os.path.basename(file_path)}")
+                self._load_single_template(file_path)
             
             return len(self.templates) > 0
         else:
-            # Single file path
             return self._load_single_template(template_path)
     
     def _load_single_template(self, file_path):
@@ -91,13 +81,13 @@ class PacmanDetector:
     
     def try_templates(self, frame):
         """
-        Try detection with each template, stopping at the first match.
+        Try detection with each template, finding ALL matches.
         
         Args:
             frame: A numpy array containing the game frame
             
         Returns:
-            tuple: Same as process_and_resize but using the first successful template
+            tuple: Same as process_and_resize but using all successful templates
         """
         if not self.templates:
             # Return empty results
@@ -137,23 +127,55 @@ class PacmanDetector:
         binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
         detection_found = False
         
-        # Try each template until a match is found
+        # Try each template and find ALL matches
         for template in self.templates:
             # Perform template matching
             res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
-            _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
             
-            if max_confidence >= self.threshold:
+            # Find ALL locations where the match exceeds the threshold
+            locations = np.where(res >= self.threshold)
+            
+            # Process all matching locations
+            for y, x in zip(locations[0], locations[1]):
                 detection_found = True
                 
-                # Update the mask with this detection
-                w, h = template.shape[1], template.shape[0]
-                x, y = max_loc
-                binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)  # Reset mask
-                binary_mask[y:y+h, x:x+w] = 1  # Create new mask for this detection
+                # Get template dimensions
+                h, w = template.shape
                 
-                # Stop searching once we find a match
-                break
+                # Add this detection to the mask without resetting it
+                binary_mask[y:y+h, x:x+w] = 1
+        
+        # DEBUG: Print detection statistics
+        detection_pixels = np.sum(binary_mask)
+        print(f"🔍 Detection stats: {detection_pixels} pixels detected as Pacman")
+        if detection_pixels > 0:
+            # Make sure the binary_mask is 2D for np.where()
+            if len(binary_mask.shape) > 2:
+                # If mask has more than 2 dimensions, use only the first channel
+                flat_mask = binary_mask[:,:,0]
+            else:
+                flat_mask = binary_mask
+                
+            # Find positions where mask is 1 (detections)
+            positions = np.where(flat_mask == 1)
+            y_coords, x_coords = positions[0], positions[1]
+            
+            # Get unique coordinates (top-left corners of detections)
+            unique_coords = []
+            i = 0
+            seen = set()
+            while i < len(y_coords) and len(unique_coords) < 5:
+                # Check for new regions by looking at larger gaps
+                if i == 0 or (abs(y_coords[i] - y_coords[i-1]) > 5 or abs(x_coords[i] - x_coords[i-1]) > 5):
+                    coord = (y_coords[i], x_coords[i])
+                    if coord not in seen:
+                        unique_coords.append(coord)
+                        seen.add(coord)
+                i += 1
+            
+            print("📌 Sample detection positions (potential objects):")
+            for y, x in unique_coords[:5]:  # Show at most 5 positions
+                print(f"  Position: ({x}, {y})")
         
         # Crop the mask below line 103 to avoid false detections in score bar
         if binary_mask.shape[0] > 103:
@@ -195,7 +217,7 @@ class PacmanDetector:
     
     def process_frame(self, frame):
         """
-        Process a frame to detect PacMan and generate a binary mask.
+        Process a frame to detect PacMan and generate a binary mask with ALL detections.
         
         Args:
             frame: A numpy array containing the game frame
@@ -222,21 +244,21 @@ class PacmanDetector:
         # Create empty binary mask the same size as the frame
         binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
         
-        # Try each template and use the best match
+        # Try each template and find ALL matches
         for template in self.templates:
             # Perform template matching
             res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
-            _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
             
-            if max_confidence >= self.threshold:
-                # Create mask with this detection
-                w, h = template.shape[1], template.shape[0]
-                x, y = max_loc
-                binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)  # Reset mask
-                binary_mask[y:y+h, x:x+w] = 1  # Create new mask for this detection
+            # Find ALL locations where the match exceeds the threshold
+            locations = np.where(res >= self.threshold)
+            
+            # Process all matching locations
+            for y, x in zip(locations[0], locations[1]):
+                # Get template dimensions
+                h, w = template.shape
                 
-                # Stop at the first successful match
-                break
+                # Add this detection to the mask without resetting it
+                binary_mask[y:y+h, x:x+w] = 1
         
         # Crop the mask below line 103 to avoid false detections in score bar
         if binary_mask.shape[0] > 103:
@@ -247,10 +269,9 @@ class PacmanDetector:
     def process_and_resize(self, frame):
         """
         Process a frame for detection at detection_size and then resize to process_size.
-        Uses all templates and returns the first successful match.
+        Uses all templates and returns all successful matches.
         """
-        # For multiple templates, use the try_templates method which implements
-        # the logic of trying each template and stopping at the first match
+        # For multiple templates, use the try_templates method 
         if len(self.templates) > 1:
             return self.try_templates(frame)
         
@@ -311,13 +332,11 @@ class PacmanDetector:
             tuple: (detection_frames, model_frames, binary_masks, combined_outputs)
                 combined_outputs: Tensor/array with shape (batch, H, W, 2) containing frame+mask
         """
-        # Convert tensor to numpy if needed
         if tf.is_tensor(frames):
             frames_np = frames.numpy()
         else:
             frames_np = frames
             
-        # Process each frame
         detection_frames = []
         model_frames = []
         binary_masks = []
@@ -330,13 +349,11 @@ class PacmanDetector:
             binary_masks.append(mask)
             combined_outputs.append(combined)
             
-        # Convert back to numpy arrays
         detection_frames = np.array(detection_frames)
         model_frames = np.array(model_frames)
         binary_masks = np.array(binary_masks)
         combined_outputs = np.array(combined_outputs)
         
-        # Convert back to tensors if input was a tensor
         if tf.is_tensor(frames):
             detection_frames = tf.convert_to_tensor(detection_frames)
             model_frames = tf.convert_to_tensor(model_frames)
@@ -345,14 +362,12 @@ class PacmanDetector:
             
         return detection_frames, model_frames, binary_masks, combined_outputs
 
-# Simplified function to just get the combined output (frame+mask) for the model
 def process_for_model(frames, template_path=None, threshold=0.7, detection_size=(128, 128), process_size=(64, 64)):
     """Process frames and return combined output (frame+mask) for model input."""
     detector = create_detector(template_path, threshold, detection_size, process_size)
     _, _, _, combined_outputs = detector.process_batch(frames)
     return combined_outputs
 
-# Simple function to create a detector instance
 def create_detector(template_path=None, threshold=0.7, detection_size=(128, 128), process_size=(64, 64)):
     """Create and return a PacmanDetector instance."""
     return PacmanDetector(template_path, threshold, detection_size, process_size)
