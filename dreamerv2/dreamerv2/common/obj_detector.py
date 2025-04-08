@@ -29,6 +29,7 @@ class PacmanDetector:
         self.detection_size = detection_size
         self.process_size = process_size
         self.logger = logging.getLogger('PacmanDetector')
+        self.debug_enabled = True  # Enable/disable detailed debug output
 
         # Set up default template path if none provided
         if template_path is None:
@@ -97,6 +98,45 @@ class PacmanDetector:
         """Return the first template for backward compatibility."""
         return self.templates[0] if self.templates else None
     
+    def _generate_detection_debug_info(self, detected_template_name, binary_mask, best_confidence=None):
+        """
+        Generate structured debug information for frame processing.
+        
+        Args:
+            detected_template_name: Name of the detected template, or None if none was detected
+            binary_mask: The binary mask with 1s at detected positions
+            best_confidence: The best confidence score (if no detection, otherwise None)
+        
+        Returns:
+            str: Formatted debug string
+        """
+        # Count pixels with value 1
+        pixels_count = np.sum(binary_mask) if binary_mask is not None else 0
+        
+        # Get coordinates of pixels with value 1
+        coords_list = []
+        if binary_mask is not None and pixels_count > 0:
+            coords = np.where(binary_mask == 1)
+            coords_list = list(zip(coords[0].tolist(), coords[1].tolist()))  # List of (y, x) coordinates
+        
+        # Limit the number of coordinates to avoid excessively large strings
+        max_coords_to_show = 5
+        coords_truncated = coords_list[:max_coords_to_show]
+        coords_str = str(coords_truncated)
+        if len(coords_list) > max_coords_to_show:
+            coords_str = coords_str[:-1] + ", ...]"  # Replace the closing bracket with ", ...]"
+        
+        # Format the debug string
+        debug_str = "$$Frame Procs$$\n"
+        debug_str += f"Plantilla detectada: {detected_template_name}\n"
+        debug_str += f"Pixels con 1's: Pasados al segundo canal\n"
+        debug_str += f" - Cantidad (suma): {pixels_count}\n"
+        debug_str += f" - Ubicacion (lista de coords): {coords_str}\n"
+        debug_str += f"Mejor similitud no detectada: {best_confidence if detected_template_name is None else 'None'}\n"
+        debug_str += "$$End$$"
+        
+        return debug_str
+    
     def try_templates(self, frame):
         """
         Try detection with each template, stopping at the first match.
@@ -108,7 +148,10 @@ class PacmanDetector:
             tuple: Same as process_and_resize but using the first successful template
         """
         if not self.templates:
-            print("PacmanDetector: No templates available for detection")
+            if self.debug_enabled:
+                debug_info = self._generate_detection_debug_info(None, None, None)
+                print(debug_info)
+                
             # Return empty results
             binary_mask = np.zeros_like(frame, dtype=np.uint8)
             if len(frame.shape) > 2:
@@ -146,6 +189,8 @@ class PacmanDetector:
         binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
         best_confidence = 0
         detection_found = False
+        detected_template_index = -1
+        all_confidences = []
         
         # Try each template until a match is found
         templates_checked = 0
@@ -155,26 +200,38 @@ class PacmanDetector:
             # Perform template matching
             res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
             _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
+            all_confidences.append((i, max_confidence))
             
             if max_confidence >= self.threshold and max_confidence > best_confidence:
                 detection_found = True
                 best_confidence = max_confidence
+                detected_template_index = i
                 
                 # Update the mask with this detection
                 w, h = template.shape[1], template.shape[0]
                 x, y = max_loc
-                binary_mask[y:y+h, x:x+w] = 1
-                
-                print(f"PacmanDetector: Match found with template {i} ({self.template_names[i]}) at confidence {max_confidence:.3f}")
+                binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)  # Reset mask
+                binary_mask[y:y+h, x:x+w] = 1  # Create new mask for this detection
                 
                 # Stop searching once we find a match
                 break
         
-        print(f"PacmanDetector: Checked {templates_checked}/{len(self.templates)} templates, detection found: {detection_found}")
-        
         # NEW: Crop the mask below line 103 to avoid false detections in score bar
         if binary_mask.shape[0] > 103:
             binary_mask[103:, :] = 0
+        
+        # Generate debug information
+        if self.debug_enabled:
+            if detection_found:
+                detected_name = self.template_names[detected_template_index]
+                debug_info = self._generate_detection_debug_info(detected_name, binary_mask)
+            else:
+                # Find the best non-detection confidence
+                all_confidences.sort(key=lambda x: x[1], reverse=True)
+                highest_conf = all_confidences[0][1] if all_confidences else 0
+                debug_info = self._generate_detection_debug_info(None, binary_mask, highest_conf)
+            
+            print(debug_info)
         
         # Resize for model processing
         model_frame = cv2.resize(
@@ -222,6 +279,12 @@ class PacmanDetector:
         """
         if not self.templates:
             self.logger.warning("No templates loaded, cannot detect PacMan")
+            
+            # Generate debug information
+            if self.debug_enabled:
+                debug_info = self._generate_detection_debug_info(None, None, None)
+                print(debug_info)
+                
             # Return original frame and empty mask
             mask = np.zeros_like(frame, dtype=np.uint8)
             if len(mask.shape) > 2 and mask.shape[2] >= 3:
@@ -240,30 +303,45 @@ class PacmanDetector:
         # Create empty binary mask the same size as the frame
         binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)
         best_confidence = 0
+        detected_template_index = -1
+        all_confidences = []
         
         # Try each template and use the best match
-        for template in self.templates:
+        for i, template in enumerate(self.templates):
             # Perform template matching
             res = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
             _, max_confidence, _, max_loc = cv2.minMaxLoc(res)
+            all_confidences.append((i, max_confidence))
             
             if max_confidence >= self.threshold and max_confidence > best_confidence:
                 best_confidence = max_confidence
-                
-                # Clear the previous mask
-                binary_mask.fill(0)
+                detected_template_index = i
                 
                 # Create mask with this detection
                 w, h = template.shape[1], template.shape[0]
                 x, y = max_loc
-                binary_mask[y:y+h, x:x+w] = 1
+                binary_mask = np.zeros_like(gray_frame, dtype=np.uint8)  # Reset mask
+                binary_mask[y:y+h, x:x+w] = 1  # Create new mask for this detection
                 
                 # Stop at the first successful match
                 break
-                
+        
         # NEW: Crop the mask below line 103 to avoid false detections in score bar
         if binary_mask.shape[0] > 103:
             binary_mask[103:, :] = 0
+            
+        # Generate debug information
+        if self.debug_enabled:
+            if detected_template_index >= 0:
+                detected_name = self.template_names[detected_template_index]
+                debug_info = self._generate_detection_debug_info(detected_name, binary_mask)
+            else:
+                # Find the best non-detection confidence
+                all_confidences.sort(key=lambda x: x[1], reverse=True)
+                highest_conf = all_confidences[0][1] if all_confidences else 0
+                debug_info = self._generate_detection_debug_info(None, binary_mask, highest_conf)
+            
+            print(debug_info)
             
         return frame, binary_mask
     
