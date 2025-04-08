@@ -124,6 +124,53 @@ class PacmanDetector:
             
             # Set the detected region to 1 in the binary mask
             binary_mask[y1:y2, x1:x2] = 1
+
+
+        # =================== BLOQUE DE GUARDADO ===================
+        # Obtener la ruta base a partir de la variable de entorno 'LOGDIR'
+        # Si no está definida se usa el directorio actual
+        import os, time
+        from PIL import Image
+        logdir = os.environ.get("LOGDIR", ".")
+        base_save_folder = os.path.join(logdir, "imagenes_guardadas")
+        # Definir las subcarpetas deseadas
+        obs_orig_folder = os.path.join(base_save_folder, "obs_original")
+        obs_obj_folder = os.path.join(base_save_folder, "obs_objeto")
+        # Crear las carpetas si no existen
+        for folder in [ obs_orig_folder, obs_obj_folder]:
+            if not os.path.exists(folder):
+                os.makedirs(folder, exist_ok=True)
+        # Generar un timestamp para el nombre de archivos
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+        # Guardar la imagen original en escala de grises (obs_original)
+        obs_orig_filename = os.path.join(obs_orig_folder, f"orig_{timestamp}.png")
+        # Si la imagen gris es 2D, se especifica el modo "L"
+        if len(gray_frame.shape) == 2:
+            im_gray = Image.fromarray(gray_frame, mode="L")
+        elif len(gray_frame.shape) == 3 and gray_frame.shape[2] == 1:
+            im_gray = Image.fromarray(gray_frame.squeeze(axis=-1), mode="L")
+        else:
+            im_gray = Image.fromarray(gray_frame)
+        im_gray.save(obs_orig_filename)
+
+        # Guardar la máscara binaria (obs_objeto)
+        obs_obj_filename = os.path.join(obs_obj_folder, f"mask_{timestamp}.png")
+        # Multiplicar la máscara por 255 para visualizar: 0 se queda en negro, 1 pasa a 255 (blanco)
+        mask_to_save = (binary_mask * 255).astype(np.uint8)
+        # Forzar a que la máscara tenga 2 dimensiones en caso de tener un canal extra
+        if mask_to_save.ndim != 2:
+            mask_to_save = np.squeeze(mask_to_save)
+        im_mask = Image.fromarray(mask_to_save, mode="L")
+        im_mask.save(obs_obj_filename)
+
+        # Opcional: imprimir las rutas donde se guardaron las imágenes (si no se suprime la salida)
+        if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+            print(f"  Observación original (grayscale) guardada en: {obs_orig_filename}")
+            print(f"  Máscara de objeto guardada en: {obs_obj_filename}")
+        # ===========================================================
+
+    
         
         return frame, binary_mask
     

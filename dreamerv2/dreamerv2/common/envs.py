@@ -837,6 +837,9 @@ class ObjectDetectionWrapper:
     def _process_obs(self, obs):
         """Process observation to add object detection mask."""
         import numpy as np
+        from PIL import Image
+        import os
+        import time
         
         # Skip printing during channel detection
         if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
@@ -850,7 +853,30 @@ class ObjectDetectionWrapper:
             
             # Get the original image
             original_image = obs['image']
-            
+            '''# === CODIGO PARA GUARDAR LA IMAGEN ===
+            # Obtener la ruta de logs desde la variable de entorno 'LOGDIR'
+            logdir = os.environ.get("LOGDIR", ".")
+            # Crear una subcarpeta (por ejemplo, 'imagenes_guardadas') dentro de logdir
+            save_folder = os.path.join(logdir, "imagenes_guardadas")
+            if not os.path.exists(save_folder):
+                os.makedirs(save_folder)
+            # Generar un nombre de archivo usando timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = os.path.join(save_folder, f"obs_{timestamp}.png")
+            # Dado que la imagen está en escala de grises y tiene forma (128,128,1), 
+            # se le quita la dimensión del canal para que PIL la procese correctamente.
+            if original_image.shape[-1] == 1:
+                image_to_save = original_image.squeeze(axis=-1)
+                # Modo "L" indica escala de grises
+                im = Image.fromarray(image_to_save, mode="L")
+            else:
+                im = Image.fromarray(original_image)
+            im.save(filename)
+            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
+                print(f"  Imagen guardada en: {filename}")
+            # ========================================'''
+
+
             # Process the image with object detection
             import time
             start_time = time.time()
