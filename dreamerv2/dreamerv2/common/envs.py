@@ -52,18 +52,12 @@ class GymWrapper:
     if not self._act_is_dict:
       action = action[self._act_key]
     obs, reward, done, info = self._env.step(action)
-    # Debug print for observation shape
-    if isinstance(obs, dict) and 'image' in obs:
-      print("DEBUG - Environment - Raw observation image shape:", obs['image'].shape)
     if not self._obs_is_dict:
       obs = {self._obs_key: obs}
     obs['reward'] = float(reward)
     obs['is_first'] = False
     obs['is_last'] = done
     obs['is_terminal'] = info.get('is_terminal', done)
-    # Debug print for processed observation shape
-    if isinstance(obs, dict) and 'image' in obs:
-      print("DEBUG - Environment - Processed observation image shape:", obs['image'].shape)
     return obs
 
   def reset(self):
@@ -105,7 +99,6 @@ class DMC:
     self._ignored_keys = []
     for key, value in self._env.observation_spec().items():
       if value.shape == (0,):
-        print(f"Ignoring empty observation key '{key}'.")
         self._ignored_keys.append(key)
 
   @property
@@ -463,7 +456,6 @@ class ResizeImage:
     self._keys = [
         k for k, v in env.obs_space.items()
         if len(v.shape) > 1 and v.shape[:2] != size]
-    print(f'Resizing keys {",".join(self._keys)} to {self._size}.')
     if self._keys:
       from PIL import Image
       self._Image = Image
@@ -646,7 +638,6 @@ class Async:
         raise KeyError('Received message of unknown type {}'.format(message))
     except Exception:
       stacktrace = ''.join(traceback.format_exception(*sys.exc_info()))
-      print('Error in environment process: {}'.format(stacktrace))
       conn.send((self._EXCEPTION, stacktrace))
     finally:
       try:
@@ -699,24 +690,9 @@ class ObjectDetectionWrapper:
             detection_size=self.detection_size,
             process_size=self.process_size
         )
-        
-        # Debug detector's templates
-        if hasattr(self.detector, 'templates') and self.detector.templates:
-            print(f"\nDetector has {len(self.detector.templates)} templates:")
-            for i, template in enumerate(self.detector.templates):
-                if hasattr(template, 'shape'):
-                    print(f"  Template {i}: shape={template.shape}")
-                else:
-                    print(f"  Template {i}: {type(template)}")
-        elif hasattr(self.detector, 'template') and self.detector.template is not None:
-            print(f"\nDetector has template with shape: {self.detector.template.shape}")
-        else:
-            print("\nNo template found in detector")
             
         # Pre-determine the output channels count (do this only once)
         self._output_channels = self._determine_output_channels()
-        print(f"  Preprocessed output will have {self._output_channels} channels")
-        print("="*50)
         
         # Handle both gym-style and DreamerV2-style environments
         if hasattr(self._env, 'act_space'):
@@ -787,7 +763,6 @@ class ObjectDetectionWrapper:
                 spaces['image'] = gym.spaces.Box(0, 255, shape, dtype=np.uint8)
                 print(f"Updated observation space shape: {spaces['image'].shape}")
         
-        print("==== OBS SPACE UPDATE COMPLETE ====\n")
         return spaces
 
     def _update_observation_space(self):
@@ -795,7 +770,6 @@ class ObjectDetectionWrapper:
         import gym
         from gym.spaces import Box
         
-        print(f"\n==== UPDATING GYM OBSERVATION SPACE ====")
         obs_space = self._env.observation_space
         
         # Get input space information
@@ -825,7 +799,6 @@ class ObjectDetectionWrapper:
             result = Box(0, 255, output_shape, dtype=np.uint8)
             print(f"Updated Box space to shape {output_shape}")
         
-        print("==== GYM OBSERVATION SPACE UPDATE COMPLETE ====\n")
         return result
 
     def _resize(self, image, size):
@@ -856,9 +829,6 @@ class ObjectDetectionWrapper:
         import numpy as np
         
         if isinstance(obs, dict) and 'image' in obs:
-            if not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-                pass
-            
             # Get the original image
             original_image = obs['image']
             
@@ -893,8 +863,6 @@ class ObjectDetectionWrapper:
             combined = np.concatenate([small_original, small_mask], axis=-1)
                 
             obs['image'] = combined
-        elif not hasattr(self, '_suppress_prints') or not self._suppress_prints:
-            print("  Observation is not a dictionary with 'image' key")
             
         return obs
 
