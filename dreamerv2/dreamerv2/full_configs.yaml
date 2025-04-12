@@ -7,9 +7,9 @@ defaults:
   task: dmc_walker_walk
   envs: 1
   envs_parallel: none
-  render_size: [128, 128]
+  render_size: [64, 64] #Necesario para evitar errores
   process_size: [64, 64]  # New parameter for post-detection resize
-  use_obj_detection: True
+  use_obj_detection: False #True
   obj_detection_threshold: 0.75 # New parameter for object detection threshold
   dmc_camera: -1
   atari_grayscale: True
@@ -33,7 +33,7 @@ defaults:
   precision: 16
   jit: True
   debug_prints: True
-  channels_expected: 2  # No default config, it depends purely in amount of objetcs
+  channels_expected: 1  #Para la version sin objetos
 
   # Agent
   clip_rewards: tanh
@@ -106,7 +106,7 @@ atari:
   discount: 0.999
   loss_scales.kl: 0.1
   loss_scales.discount: 5.0
-  use_obj_detection: True  # Enable object detection specifically for PacMan
+  use_obj_detection: False #True  # Enable object detection specifically for PacMan
 
 crafter:
 
