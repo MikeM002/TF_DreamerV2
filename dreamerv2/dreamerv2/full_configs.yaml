@@ -9,13 +9,13 @@ defaults:
   envs_parallel: none
   render_size: [128, 128]
   process_size: [64, 64]  # New parameter for post-detection resize
-  use_obj_detection: False
-  obj_detection_threshold: 0.75 #Tresh para Pills
+  use_obj_detection: True
+  obj_detection_threshold: 0.75 # New parameter for object detection threshold
   dmc_camera: -1
   atari_grayscale: True
-  time_limit: 0
+  time_limit: 3000
   action_repeat: 2
-  steps: 1e4
+  steps: 200000
   log_every: 1e3
   eval_every: 1e3
   eval_eps: 1
@@ -32,6 +32,8 @@ defaults:
   log_keys_max: '^$'
   precision: 16
   jit: True
+  debug_prints: True
+  channels_expected: 2  # No default config, it depends purely in amount of objetcs
 
   # Agent
   clip_rewards: tanh
@@ -82,6 +84,7 @@ defaults:
   disag_action_cond: True
   expl_model_loss: kl
 
+
 atari:
 
   task: atari_ms_pacman
@@ -128,7 +131,7 @@ dmc_vision:
   action_repeat: 2
   eval_every: 1e4
   prefill: 1000
-  pretrain: 100
+  pretrain: 1
   clip_rewards: identity
   pred_discount: False
   replay.prioritize_ends: False

@@ -156,7 +156,7 @@ def ensure_channel_consistency(config, train_env, eval_env):
 
 def main():
 
-  print("-"*100,"Version:",62)
+  print("-"*100,"Version:",72)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
@@ -164,7 +164,7 @@ def main():
   #Se carga la configuración por defecto
   yaml = YAML()
   #configs = yaml.load((pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
-  configs = yaml.load((pathlib.Path(__file__).parent / 'lite_configs.yaml').read_text())
+  configs = yaml.load((pathlib.Path(__file__).parent / 'full_configs.yaml').read_text())
   parsed, remaining = common.Flags(configs=['defaults']).parse(known_only=True)
   config = common.Config(configs['defaults'])
   for name in parsed.configs:
