@@ -156,7 +156,7 @@ def ensure_channel_consistency(config, train_env, eval_env):
 
 def main():
 
-  print("-"*100,"Version:",72)
+  print("-"*100,"Version:",73)
 
   #configs = yaml.safe_load((
       #pathlib.Path(sys.argv[0]).parent / 'configs.yaml').read_text())
