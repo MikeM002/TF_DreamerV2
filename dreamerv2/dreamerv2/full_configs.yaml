@@ -92,8 +92,8 @@ atari:
   decoder: {mlp_keys: '$^', cnn_keys: 'image'}
   time_limit: 27000
   action_repeat: 4
-  steps: 500000 #pasos en 500K
-  eval_every: 2.5e5
+  steps: 1e6 #pasos en 1M
+  eval_every: 2.5e4 #Logs mas frecuentes para eval
   log_every: 1e4
   prefill: 50000
   train_every: 16
